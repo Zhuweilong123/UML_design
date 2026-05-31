@@ -157,3 +157,74 @@ async def save_review(req: ReviewRequest):
         f.write(entry)
 
     return {"success": True, "file": review_file}
+
+
+# ── Generated code management ───────────────────────────
+
+class SaveGeneratedRequest(BaseModel):
+    project_name: str = "project"
+    language: str = "python"
+    source_files: dict[str, str] = {}  # filename -> content
+    test_files: dict[str, str] = {}    # filename -> content
+
+
+@router.post("/save-generated")
+async def save_generated_code(req: SaveGeneratedRequest):
+    """Save generated source and test code to generated/ folder."""
+    settings = get_settings()
+    base = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "generated"))
+
+    # Create project folders
+    src_dir = os.path.join(base, "src", req.project_name, req.language)
+    test_dir = os.path.join(base, "test", req.project_name, req.language)
+    os.makedirs(src_dir, exist_ok=True)
+    os.makedirs(test_dir, exist_ok=True)
+
+    saved = {"src": [], "test": []}
+
+    for fname, content in req.source_files.items():
+        fp = os.path.join(src_dir, fname)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(content)
+        saved["src"].append(fname)
+
+    for fname, content in req.test_files.items():
+        fp = os.path.join(test_dir, fname)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(content)
+        saved["test"].append(fname)
+
+    return {
+        "success": True,
+        "src_dir": src_dir.replace("\\", "/"),
+        "test_dir": test_dir.replace("\\", "/"),
+        "saved": saved,
+    }
+
+
+@router.get("/list-generated")
+async def list_generated_code():
+    """List all generated code projects."""
+    settings = get_settings()
+    base = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "generated"))
+
+    def list_dir(path):
+        if not os.path.exists(path):
+            return []
+        result = []
+        for root, dirs, files in os.walk(path):
+            for f in files:
+                fp = os.path.join(root, f).replace("\\", "/")
+                result.append({
+                    "name": f,
+                    "path": fp,
+                    "size": os.path.getsize(fp),
+                    "modified": datetime.fromtimestamp(os.path.getmtime(fp)).isoformat(),
+                })
+        return result
+
+    return {
+        "src": list_dir(os.path.join(base, "src")),
+        "test": list_dir(os.path.join(base, "test")),
+        "base": base.replace("\\", "/"),
+    }

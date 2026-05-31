@@ -13,7 +13,7 @@ import {
   FileMarkdownOutlined, SettingOutlined, PlayCircleOutlined,
   ZoomInOutlined, ZoomOutOutlined, ExpandOutlined,
   AppstoreOutlined, EyeInvisibleOutlined,
-  PlusSquareOutlined, DownOutlined,
+  PlusSquareOutlined, DownOutlined, TableOutlined,
 } from '@ant-design/icons';
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
@@ -22,6 +22,7 @@ import {
   exportMarkdown, generateCode as apiGenerateCode,
   optimizeUml as apiOptimizeUml, createPipeline,
   browseDirectory, type BrowseResult,
+  saveGeneratedCode,
 } from '../../services/api';
 import './Toolbar.css';
 
@@ -56,6 +57,7 @@ const Toolbar: React.FC = () => {
     setRightPanelVisible, setCodeGenLoading,
     setOptimizationResult,
     setActivePipelineId, fileDialogVisible, setFileDialogVisible,
+    showTestCaseInCanvas, toggleTestCaseInCanvas,
   } = useUiStore();
 
   const [fileList, setFileList] = useState<Array<{
@@ -189,7 +191,12 @@ const Toolbar: React.FC = () => {
       setGeneratedCode(result.files);
       setRightPanelTab('code');
       setRightPanelVisible(true);
-      message.success({ content: `已生成 ${Object.keys(result.files).length} 个文件`, key: 'codegen' });
+      // Save to disk in background
+      saveGeneratedCode({
+        project_name: diagram.name, language: selectedLanguage,
+        source_files: result.files, test_files: {},
+      }).catch(() => {});
+      message.success({ content: `已生成 ${Object.keys(result.files).length} 个文件 → generated/src/${diagram.name}/${selectedLanguage}/`, key: 'codegen', duration: 5 });
     } catch (e) {
       message.error({ content: '代码生成失败: ' + String(e), key: 'codegen' });
     }
@@ -346,6 +353,18 @@ const Toolbar: React.FC = () => {
         </Tooltip>
 
         <Divider type="vertical" />
+
+        <Divider type="vertical" />
+
+        <Tooltip title={showTestCaseInCanvas ? '返回UML画布' : '用例检视'}>
+          <Button
+            icon={<TableOutlined />}
+            type={showTestCaseInCanvas ? 'primary' : 'default'}
+            onClick={toggleTestCaseInCanvas}
+          >
+            用例
+          </Button>
+        </Tooltip>
 
         <Tooltip title="缩小">
           <Button icon={<ZoomOutOutlined />} onClick={handleZoomOut} />

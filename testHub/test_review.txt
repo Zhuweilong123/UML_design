@@ -8,3 +8,103 @@
   Comment: Switched to sheet: OtaTask
 [2026-05-30 22:19:38] switch_sheet | File: testCases.xlsx | Sheet: 用例概览
   Comment: Switched to sheet: 用例概览
+[2026-05-31 10:41:10] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 10:41:10] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 10:41:13] switch_sheet | File: testCases.xlsx | Sheet: BaseTask
+  Comment: Switched to sheet: BaseTask
+[2026-05-31 10:41:19] switch_sheet | File: testCases.xlsx | Sheet: OtaTask
+  Comment: Switched to sheet: OtaTask
+[2026-05-31 10:41:22] switch_sheet | File: testCases.xlsx | Sheet: 用例概览
+  Comment: Switched to sheet: 用例概览
+[2026-05-31 10:41:39] switch_sheet | File: testCases.xlsx | Sheet: TaskScheduler
+  Comment: Switched to sheet: TaskScheduler
+[2026-05-31 10:41:42] switch_sheet | File: testCases.xlsx | Sheet: 关系验证
+  Comment: Switched to sheet: 关系验证
+[2026-05-31 10:41:44] switch_sheet | File: testCases.xlsx | Sheet: 设计信息
+  Comment: Switched to sheet: 设计信息
+[2026-05-31 10:50:29] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 10:50:29] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 10:51:02] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 10:51:02] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 10:51:09] switch_sheet | File: testCases.xlsx | Sheet: BaseTask
+  Comment: Switched to sheet: BaseTask
+[2026-05-31 10:58:07] switch_sheet | File: testCases.xlsx | Sheet: OtaTask
+  Comment: Switched to sheet: OtaTask
+[2026-05-31 10:58:42] generate_full | File: testCases.xlsx
+  Comment: Generated 7 test files (full)
+[2026-05-31 11:17:06] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 11:17:06] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 11:17:14] generate_full | File: testCases.xlsx
+  Comment: Generated 2 test files (full)
+[2026-05-31 11:18:13] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 11:18:13] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 12:18:26] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 12:18:26] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 12:18:47] switch_sheet | File: testCases.xlsx | Sheet: BaseTask
+  Comment: Switched to sheet: BaseTask
+[2026-05-31 12:18:48] switch_sheet | File: testCases.xlsx | Sheet: OtaTask
+  Comment: Switched to sheet: OtaTask
+[2026-05-31 12:18:49] switch_sheet | File: testCases.xlsx | Sheet: CrowTask
+  Comment: Switched to sheet: CrowTask
+[2026-05-31 12:20:56] edit | File: testCases.xlsx | Sheet: CrowTask | Case: TC-CROW-010
+  Comment: TC-CROW-010: 前置条件 "间隔7天" → "距离上次鸡叫间隔7天"
+[2026-05-31 12:21:05] save | File: testCases.xlsx
+  Comment: Saved 1 changes to testCases.xlsx
+[2026-05-31 14:37:54] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 14:37:54] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 14:38:01] switch_sheet | File: testCases.xlsx | Sheet: BaseTask
+  Comment: Switched to sheet: BaseTask
+[2026-05-31 14:38:02] switch_sheet | File: testCases.xlsx | Sheet: OtaTask
+  Comment: Switched to sheet: OtaTask
+[2026-05-31 14:38:03] switch_sheet | File: testCases.xlsx | Sheet: CrowTask
+  Comment: Switched to sheet: CrowTask
+[2026-05-31 14:43:53] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 14:43:53] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 14:44:03] switch_sheet | File: testCases.xlsx | Sheet: OtaTask
+  Comment: Switched to sheet: OtaTask
+[2026-05-31 14:44:04] switch_sheet | File: testCases.xlsx | Sheet: CrowTask
+  Comment: Switched to sheet: CrowTask
+[2026-05-31 14:52:47] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 14:52:47] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:00:12] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:00:12] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:09:25] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:09:25] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:11:08] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:11:08] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:14:48] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:14:48] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:16:17] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:16:18] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:21:37] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-31 15:21:37] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx

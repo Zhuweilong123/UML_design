@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import AsyncIterator
 
+import os
 from app.models.uml import UmlDiagram
 from app.models.pipeline import (
     PipelineState, PipelineStage, StageName, StageStatus, STAGE_LABELS,
@@ -14,6 +15,46 @@ from app.services.llm_service import chat
 from app.services.code_generator import (
     generate_code, generate_tests, optimize_uml, fix_code,
 )
+from app.core.config import get_settings
+
+
+def _save_generated_files(project_name: str, language: str, src: dict, test: dict = None):
+    """Save generated code files to generated/ directory."""
+    settings = get_settings()
+    base = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "generated"))
+    os.makedirs(base, exist_ok=True)
+
+    result = {"src": [], "test": []}
+    # Sanitize project name for filesystem
+    safe_name = "".join(c for c in project_name if c.isalnum() or c in "._- ").strip() or "project"
+
+    if src:
+        src_dir = os.path.join(base, "src", safe_name, language)
+        os.makedirs(src_dir, exist_ok=True)
+        for fname, content in src.items():
+            fp = os.path.join(src_dir, fname)
+            try:
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(content)
+                result["src"].append(fp.replace("\\", "/"))
+                print(f"[Pipeline] Saved source: {fp}")
+            except Exception as e:
+                print(f"[Pipeline] Failed to save {fp}: {e}")
+
+    if test:
+        test_dir = os.path.join(base, "test", safe_name, language)
+        os.makedirs(test_dir, exist_ok=True)
+        for fname, content in test.items():
+            fp = os.path.join(test_dir, fname)
+            try:
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(content)
+                result["test"].append(fp.replace("\\", "/"))
+                print(f"[Pipeline] Saved test: {fp}")
+            except Exception as e:
+                print(f"[Pipeline] Failed to save {fp}: {e}")
+
+    return result
 
 # In-memory store (replace with DB in production)
 _pipelines: dict[str, PipelineState] = {}
@@ -156,30 +197,38 @@ async def run_pipeline(
                 language=language, filename=fname, content=content,
             ))
         pipeline.stages[2].result = {"files": list(current_code.keys())}
+        _save_generated_files(diagram.name, language, current_code)
+        pipeline.stages[2].logs = f"Saved: generated/src/{diagram.name}/{language}/"
         yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
     except Exception as e:
         yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
         return
 
     # --- Stage 4: Case Review ---
-    yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.RUNNING)
-    try:
-        case_count = len(test_cases) if test_cases else 0
-        pipeline.stages[3].logs = f"Loaded {case_count} test cases"
-        pipeline.stages[3].result = {"case_count": case_count, "cases": test_cases or []}
-        yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS)
-    except Exception as e:
-        yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.FAILED, str(e))
+    yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.RUNNING,
+                               "请在主画布检视用例，确认后继续")
+    # Pause for user to review test cases
+    yield {
+        "event": "request_case_review",
+        "pipeline_id": pipeline_id,
+        "stage": StageName.CASE_REVIEW.value,
+        "message": "请检视并修改用例，完成后点击确认继续",
+    }
+    return  # Wait for confirm via WebSocket, then resume
 
     # --- Stage 5: Test Gen ---
     yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
     try:
         test_files = await generate_tests(current_code, language)
+        print(f"[Pipeline] Stage 5: generated {len(test_files)} test files, current artifacts: {len(pipeline.code_artifacts)}")
         for fname, content in test_files.items():
             pipeline.code_artifacts.append(CodeArtifact(
-                language=language, filename=fname, content=content, version=1,
+                language=language, filename=fname, content=content, version=2,
             ))
+        print(f"[Pipeline] Stage 5: after append, artifacts: {len(pipeline.code_artifacts)}")
         pipeline.stages[4].result = {"test_files": list(test_files.keys())}
+        _save_generated_files(diagram.name, language, {}, test_files)
+        pipeline.stages[4].logs = f"Saved: generated/test/{diagram.name}/{language}/"
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
     except Exception as e:
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))
@@ -280,43 +329,68 @@ async def resume_pipeline(
     diagram: UmlDiagram,
     language: str = "python",
     auto_confirm: bool = True,
+    skip_case_review: bool = False,
+    skip_code_gen: bool = False,
 ) -> AsyncIterator[dict]:
-    """Resume pipeline from the dev_confirm stage."""
+    """Resume pipeline from the dev_confirm stage or after case review."""
     pipeline = _pipelines.get(pipeline_id)
     if not pipeline:
         raise ValueError(f"Pipeline not found: {pipeline_id}")
 
-    # Continue from stage 3 onward
     current_code: dict[str, str] = {}
     test_files: dict[str, str] = {}
 
-    # Use optimized diagram if available from stage 1
-    opt_result = pipeline.stages[0].result or {}
-    optimized_data = opt_result.get("optimized")
-    optimized_diagram = UmlDiagram(**optimized_data) if optimized_data else diagram
+    if skip_code_gen:
+        # Reuse existing source code from artifacts
+        current_code = {a.filename: a.content for a in pipeline.code_artifacts if a.version == 1}
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS, "Using cached code")
+    else:
+        # Use optimized diagram if available from stage 1
+        opt_result = pipeline.stages[0].result or {}
+        optimized_data = opt_result.get("optimized")
+        optimized_diagram = UmlDiagram(**optimized_data) if optimized_data else diagram
 
-    # --- Stage 3: Code Gen ---
-    yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
-    try:
-        current_code = await generate_code(optimized_diagram, language)
-        for fname, content in current_code.items():
-            pipeline.code_artifacts.append(CodeArtifact(
-                language=language, filename=fname, content=content,
-            ))
-        pipeline.stages[2].result = {"files": list(current_code.keys())}
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
-    except Exception as e:
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
-        return
+        # --- Stage 3: Code Gen ---
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+        try:
+            current_code = await generate_code(optimized_diagram, language)
+            for fname, content in current_code.items():
+                pipeline.code_artifacts.append(CodeArtifact(
+                    language=language, filename=fname, content=content,
+                ))
+            pipeline.stages[2].result = {"files": list(current_code.keys())}
+            _save_generated_files(diagram.name, language, current_code)
+            pipeline.stages[2].logs = f"Saved: generated/src/{diagram.name}/{language}/"
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+        except Exception as e:
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
+            return
 
     # --- Stage 4: Case Review ---
-    yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS)
+    if skip_case_review:
+        yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "Skipped")
+    else:
+        yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.RUNNING,
+                                   "请在主画布检视用例，确认后继续")
+        yield {
+            "event": "request_case_review",
+            "pipeline_id": pipeline_id,
+            "stage": StageName.CASE_REVIEW.value,
+            "message": "请检视并修改用例，完成后点击确认继续",
+        }
+        return  # Wait for confirm via WebSocket, then resume
 
     # --- Stage 5: Test Gen ---
     yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
     try:
         test_files = await generate_tests(current_code, language)
+        for fname, content in test_files.items():
+            pipeline.code_artifacts.append(CodeArtifact(
+                language=language, filename=fname, content=content, version=2,
+            ))
         pipeline.stages[4].result = {"test_files": list(test_files.keys())}
+        _save_generated_files(diagram.name, language, {}, test_files)
+        pipeline.stages[4].logs = f"Saved: generated/test/{diagram.name}/{language}/"
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
     except Exception as e:
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))

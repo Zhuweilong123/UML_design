@@ -108,6 +108,22 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                             return
                         await ws.send_json(resume_event)
+                        if resume_event.get("event") == "request_case_review":
+                            await wait_for_case_review()
+                            return
+                    break
+                elif msg.get("action") == "confirm_case_review":
+                    pipeline = get_pipeline(pipeline_id)
+                    if pipeline:
+                        for s in pipeline.stages:
+                            if s.name == StageName.CASE_REVIEW:
+                                s.status = StageStatus.SUCCESS
+                        await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
+                    async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
+                        if _is_stopped(pipeline_id):
+                            await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                            return
+                        await ws.send_json(resume_event)
                     break
         except asyncio.TimeoutError:
             pass
@@ -141,7 +157,7 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                             return True  # continue to wait_for_confirm
                     return False
                 elif msg.get("action") == "skip_instructions":
-                    # Skip Stage 1, jump directly to Stage 2 (Dev Confirm) → Stage 3 (Code Gen)
+                    # Skip Stage 1-2, jump to Stage 3-7, handle case_review pause
                     pipeline = get_pipeline(pipeline_id)
                     if pipeline:
                         yield_event = await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.SKIPPED, "Skipped by user")
@@ -153,9 +169,41 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                                 await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                                 return False
                             await ws.send_json(resume_event)
+                            # If case_review requested, wait inline
+                            if resume_event.get("event") == "request_case_review":
+                                await wait_for_case_review()
+                                return False
                     return False
         except WebSocketDisconnect:
             return False
+
+    async def wait_for_case_review():
+        """Wait for user to confirm case review."""
+        try:
+            while True:
+                raw = await ws.receive_text()
+                msg = json.loads(raw)
+                if msg.get("action") == "stop":
+                    stop_pipeline(pipeline_id)
+                    await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                    return
+                elif msg.get("action") == "confirm_case_review":
+                    # Mark case_review as success and continue
+                    pipeline = get_pipeline(pipeline_id)
+                    if pipeline:
+                        for s in pipeline.stages:
+                            if s.name == StageName.CASE_REVIEW:
+                                s.status = StageStatus.SUCCESS
+                        await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "用户确认通过"))
+                    # Resume from Stage 5 (Test Gen), skip case review
+                    async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
+                        if _is_stopped(pipeline_id):
+                            await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                            return
+                        await ws.send_json(resume_event)
+                    return
+        except WebSocketDisconnect:
+            pass
 
     try:
         async for event in run_pipeline(pipeline_id, diagram, language, auto_confirm):
@@ -175,6 +223,14 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
             if event.get("stage") == "dev_confirm" and not auto_confirm:
                 await listen_for_commands()
                 break
+
+            # If waiting for case_review, wait for user to confirm
+            if event.get("event") == "request_case_review":
+                await wait_for_case_review()
+                break
+
+        # Pipeline completed successfully
+        await ws.send_json({"event": "pipeline_complete", "pipeline_id": pipeline_id, "message": "流水线执行完成"})
     except WebSocketDisconnect:
         pass
     except Exception as e:

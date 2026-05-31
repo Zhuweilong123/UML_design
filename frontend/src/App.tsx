@@ -15,6 +15,7 @@ import CodeViewer from './components/CodeViewer/CodeViewer';
 import PipelineConsole from './components/PipelineConsole/PipelineConsole';
 import DiffViewer from './components/DiffViewer/DiffViewer';
 import TestCaseViewer from './components/TestCaseViewer/TestCaseViewer';
+import TestCodeViewer from './components/TestCodeViewer/TestCodeViewer';
 import { useUiStore, type RightPanelTab } from './stores/uiStore';
 import './App.css';
 
@@ -24,7 +25,7 @@ const App: React.FC = () => {
   const {
     rightPanelVisible, rightPanelTab, rightPanelWidth,
     setRightPanelTab, setRightPanelWidth, toggleRightPanel,
-    codeGenLoading,
+    codeGenLoading, showTestCaseInCanvas,
   } = useUiStore();
 
   const handleResize = useCallback((_e: React.MouseEvent, direction: string, ref: HTMLElement) => {
@@ -82,11 +83,11 @@ const App: React.FC = () => {
     {
       key: 'testcase' as RightPanelTab,
       label: (
-        <Tooltip title="用例检视">
+        <Tooltip title="用例代码">
           <FileTextOutlined />
         </Tooltip>
       ),
-      children: <TestCaseViewer />,
+      children: <TestCodeViewer />,
     },
   ];
 
@@ -98,10 +99,18 @@ const App: React.FC = () => {
       {/* Main Area */}
       <Layout className="app-main">
         <Content className="app-content">
-          <UMLEditor />
+          {showTestCaseInCanvas ? (
+            <TestCaseViewer embedded />
+          ) : (
+            <UMLEditor />
+          )}
           {/* Status bar */}
           <div className="status-bar">
-            <span>双击画布添加类 | 拖拽端口创建连接 | Ctrl+滚轮缩放 | 空格平移</span>
+            {showTestCaseInCanvas ? (
+              <span>双击单元格编辑用例 | 支持增删查改 | 全量/增量生成测试代码</span>
+            ) : (
+              <span>双击画布添加类 | 拖拽端口创建连接 | Ctrl+滚轮缩放 | 空格平移</span>
+            )}
             <span>Ctrl+Z 撤销 | Ctrl+Y 重做</span>
           </div>
         </Content>

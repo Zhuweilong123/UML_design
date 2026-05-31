@@ -151,6 +151,18 @@ export async function browseDirectory(path?: string): Promise<BrowseResult> {
 
 // ─── Review ────────────────────────────────────────────
 
+// ─── Generated Code ───────────────────────────────────
+
+export async function saveGeneratedCode(req: {
+  project_name: string;
+  language: string;
+  source_files: Record<string, string>;
+  test_files: Record<string, string>;
+}): Promise<{ success: boolean; src_dir: string; test_dir: string }> {
+  const { data } = await api.post('/files/save-generated', req);
+  return data;
+}
+
 // ─── TestHub ──────────────────────────────────────────
 
 export async function listTestFiles(): Promise<{

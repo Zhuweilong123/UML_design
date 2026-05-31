@@ -31,6 +31,7 @@ const PipelineConsole: React.FC = () => {
   const [currentAction, setCurrentAction] = useState('');
   const [instructionsVisible, setInstructionsVisible] = useState(false);
   const [pipelineInstructions, setPipelineInstructions] = useState('');
+  const [completed, setCompleted] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Load existing pipeline (only when not running, avoid conflicts)
@@ -81,6 +82,7 @@ const PipelineConsole: React.FC = () => {
     }
 
     setRunning(true);
+    setCompleted(false);
     setWsError(null);
     setCurrentAction('正在创建流水线...');
 
@@ -114,17 +116,23 @@ const PipelineConsole: React.FC = () => {
             store.setRightPanelTab('diff');
             store.setRightPanelVisible(true);
           }
-          // When Case Review stage starts, switch to test viewer
+          // When Case Review stage starts, switch main canvas to test cases
           if (data.stage === 'case_review' && data.status === 'running') {
             const store = useUiStore.getState();
-            store.setRightPanelTab('testcase');
-            store.setRightPanelVisible(true);
+            store.setShowTestCaseInCanvas(true);
           }
+        } else if (data.event === 'request_case_review') {
+          setCurrentAction('⏸ 等待检视用例完成...');
         } else if (data.event === 'request_instructions') {
           // Stage 1 needs optimization instructions
           setPipelineInstructions('');
           setInstructionsVisible(true);
           setCurrentAction('⏳ 等待输入优化需求...');
+        } else if (data.event === 'pipeline_complete') {
+          message.success('流水线全部完成！');
+          setRunning(false);
+          setCompleted(true);
+          setCurrentAction('全部完成');
         } else if (data.event === 'stopped') {
           message.info('流水线已停止');
           setRunning(false);
@@ -143,7 +151,11 @@ const PipelineConsole: React.FC = () => {
 
       ws.onclose = () => {
         setRunning(false);
-        if (!wsError) setCurrentAction((prev) => prev + ' (连接关闭)');
+        // Don't append "(连接关闭)" if pipeline already completed
+        setCurrentAction((prev) => {
+          if (prev.includes('全部完成') || prev.includes('已停止')) return prev;
+          return prev + ' (连接中断)';
+        });
       };
     } catch (e) {
       message.error('创建流水线失败: ' + String(e));
@@ -152,7 +164,14 @@ const PipelineConsole: React.FC = () => {
     }
   }, [diagram, selectedLanguage, activePipelineId, setActivePipelineId]);
 
-  // Confirm stage
+  // Confirm case review (Stage 4)
+  const handleConfirmCaseReview = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ action: 'confirm_case_review' }));
+    setCurrentAction('✅ 用例检视确认，继续流水线...');
+  }, []);
+
+  // Confirm stage (Stage 2)
   const handleConfirm = useCallback((accepted: boolean) => {
     if (!pipeline || !wsRef.current) return;
     const currentStage = pipeline.current_stage;
@@ -175,6 +194,10 @@ const PipelineConsole: React.FC = () => {
   // ── Render helpers ──────────────────────────────────
   const isWaitingConfirm = pipeline?.stages.some(
     (s) => s.name === StageName.DEV_CONFIRM && s.status === StageStatus.RUNNING
+  );
+
+  const isWaitingCaseReview = pipeline?.stages.some(
+    (s) => s.name === StageName.CASE_REVIEW && s.status === StageStatus.RUNNING
   );
 
   const stageItems = (pipeline?.stages || []).map((stage) => {
@@ -258,9 +281,9 @@ const PipelineConsole: React.FC = () => {
         <>
           <div className="pipeline-progress">
             <Progress
-              percent={Math.round((completedStages / totalStages) * 100)}
+              percent={completed ? 100 : Math.round((completedStages / totalStages) * 100)}
               size="small"
-              status={running ? 'active' : completedStages === totalStages ? 'success' : undefined}
+              status={running ? 'active' : completed ? 'success' : undefined}
             />
             <span className="round-info">
               优化轮次: {pipeline.optimization_round}/3
@@ -281,34 +304,47 @@ const PipelineConsole: React.FC = () => {
             <div className="confirm-card">
               <p>LLM 已完成 UML 优化，是否接受优化结果？</p>
               <Space>
-                <Button
-                  type="primary"
-                  icon={<CheckCircleOutlined />}
-                  onClick={() => handleConfirm(true)}
-                >
-                  接受
-                </Button>
-                <Button
-                  danger
-                  icon={<CloseCircleOutlined />}
-                  onClick={() => handleConfirm(false)}
-                >
-                  拒绝
+                <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleConfirm(true)}>接受</Button>
+                <Button danger icon={<CloseCircleOutlined />} onClick={() => handleConfirm(false)}>拒绝</Button>
+              </Space>
+            </div>
+          )}
+
+          {isWaitingCaseReview && (
+            <div className="confirm-card" style={{ background: '#e6f7ff', borderColor: '#91d5ff' }}>
+              <p>请在主画布中检视并修改测试用例，完成后点击确认继续</p>
+              <Space>
+                <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmCaseReview}>
+                  检视完成，继续
                 </Button>
               </Space>
             </div>
           )}
 
-          {pipeline.code_artifacts.length > 0 && (
-            <div className="artifacts-list">
-              <h4>代码产物</h4>
-              {pipeline.code_artifacts.map((a, idx) => (
-                <Tag key={idx} color="blue">
-                  {a.filename} (v{a.version})
-                </Tag>
-              ))}
-            </div>
-          )}
+          {pipeline.code_artifacts.length > 0 && (() => {
+            const srcFiles = [...new Set(pipeline.code_artifacts.filter(a =>
+              !a.filename.startsWith('test_') && !a.filename.startsWith('test')
+            ).map(a => a.filename))];
+            const testFiles = [...new Set(pipeline.code_artifacts.filter(a =>
+              a.filename.startsWith('test_') || a.filename.startsWith('test')
+            ).map(a => a.filename))];
+            return (
+              <div className="artifacts-list">
+                <h4>代码产物</h4>
+                <div style={{ marginBottom: 8 }}>
+                  <strong style={{ fontSize: 12 }}>源代码 ({srcFiles.length})：</strong>
+                  <div>{srcFiles.map((f, i) => <Tag key={'s'+i} color="blue">{f}</Tag>)}</div>
+                </div>
+                <div>
+                  <strong style={{ fontSize: 12 }}>测试代码 ({testFiles.length})：</strong>
+                  <div>
+                    {testFiles.map((f, i) => <Tag key={'t'+i} color="green">{f}</Tag>)}
+                    {testFiles.length === 0 && <span style={{color:'#999',fontSize:11}}>待生成</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {pipeline.review_log.length > 0 && (
             <div className="review-log">

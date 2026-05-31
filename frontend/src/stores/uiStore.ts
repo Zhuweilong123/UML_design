@@ -16,9 +16,13 @@ interface UiState {
   // Language
   selectedLanguage: Language;
 
-  // Code viewer
+  // Code viewer (project source code)
   generatedCode: Record<string, string> | null;
   activeCodeFile: string | null;
+
+  // Test code viewer (test case code)
+  generatedTestCode: Record<string, string> | null;
+  activeTestFile: string | null;
 
   // Diff / optimization
   diffContent: string | null;
@@ -28,6 +32,7 @@ interface UiState {
   optimizedDiagram: UmlDiagram | null;
   showingOptimized: boolean;
   optimizeInstructions: string; // last optimization request content
+  showTestCaseInCanvas: boolean; // toggle main canvas to show test cases
 
   // Pipeline
   activePipelineId: string | null;
@@ -48,12 +53,16 @@ interface UiState {
 
   setGeneratedCode: (code: Record<string, string> | null) => void;
   setActiveCodeFile: (file: string | null) => void;
+  setGeneratedTestCode: (code: Record<string, string> | null) => void;
+  setActiveTestFile: (file: string | null) => void;
   setDiffContent: (diff: string | null) => void;
   setOriginalCode: (code: Record<string, string> | null) => void;
   setOptimizedCode: (code: Record<string, string> | null) => void;
   setOptimizationResult: (original: UmlDiagram, optimized: UmlDiagram, diff: string, instructions: string) => void;
   toggleShowingVersion: () => void;
   setShowingOptimized: (v: boolean) => void;
+  toggleTestCaseInCanvas: () => void;
+  setShowTestCaseInCanvas: (v: boolean) => void;
 
   setActivePipelineId: (id: string | null) => void;
 
@@ -70,6 +79,8 @@ export const useUiStore = create<UiState>((set) => ({
   selectedLanguage: 'python',
   generatedCode: null,
   activeCodeFile: null,
+  generatedTestCode: null,
+  activeTestFile: null,
   diffContent: null,
   originalCode: null,
   optimizedCode: null,
@@ -77,6 +88,7 @@ export const useUiStore = create<UiState>((set) => ({
   optimizedDiagram: null,
   showingOptimized: false,
   optimizeInstructions: '',
+  showTestCaseInCanvas: false,
   activePipelineId: null,
   fileDialogVisible: false,
   exportDialogVisible: false,
@@ -95,6 +107,8 @@ export const useUiStore = create<UiState>((set) => ({
 
   setGeneratedCode: (code) => set({ generatedCode: code, activeCodeFile: code ? Object.keys(code)[0] || null : null }),
   setActiveCodeFile: (file) => set({ activeCodeFile: file }),
+  setGeneratedTestCode: (code) => set({ generatedTestCode: code, activeTestFile: code ? Object.keys(code)[0] || null : null }),
+  setActiveTestFile: (file) => set({ activeTestFile: file }),
   setDiffContent: (diff) => set({ diffContent: diff }),
   setOriginalCode: (code) => set({ originalCode: code }),
   setOptimizedCode: (code) => set({ optimizedCode: code }),
@@ -111,6 +125,8 @@ export const useUiStore = create<UiState>((set) => ({
 
   toggleShowingVersion: () => set((s) => ({ showingOptimized: !s.showingOptimized })),
   setShowingOptimized: (v) => set({ showingOptimized: v }),
+  toggleTestCaseInCanvas: () => set((s) => ({ showTestCaseInCanvas: !s.showTestCaseInCanvas })),
+  setShowTestCaseInCanvas: (v) => set({ showTestCaseInCanvas: v }),
 
   setActivePipelineId: (id) => set({ activePipelineId: id }),
 

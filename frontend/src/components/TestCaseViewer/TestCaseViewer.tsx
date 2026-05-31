@@ -24,7 +24,7 @@ interface SheetData {
   rows: Record<string, string>[];
 }
 
-const TestCaseViewer: React.FC = () => {
+const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   const { selectedLanguage, setRightPanelTab, setRightPanelVisible } = useUiStore();
 
   const [files, setFiles] = useState<Array<{ name: string; path: string }>>([]);
@@ -139,8 +139,8 @@ const TestCaseViewer: React.FC = () => {
         changed_cases: mode === 'incremental' ? changedCases : [],
       });
       const store = useUiStore.getState();
-      store.setGeneratedCode(result.files);
-      store.setRightPanelTab('code');
+      store.setGeneratedTestCode(result.files);
+      store.setRightPanelTab('testcase');
       store.setRightPanelVisible(true);
       const count = Object.keys(result.files).length;
       message.success({ content: `${mode === 'full' ? '全量' : '增量'}生成了 ${count} 个测试文件`, key });
@@ -203,7 +203,7 @@ const TestCaseViewer: React.FC = () => {
   const dataSource: Record<string, unknown>[] = currentSheetData?.rows.map((r, i) => ({ ...r, _key: i })) || [];
 
   return (
-    <div className="testcase-viewer">
+    <div className={`testcase-viewer ${embedded ? 'embedded' : ''}`}>
       {/* Header */}
       <div className="testcase-header">
         <h3>用例检视</h3>

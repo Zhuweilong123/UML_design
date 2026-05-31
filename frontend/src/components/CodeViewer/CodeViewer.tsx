@@ -73,7 +73,7 @@ const CodeViewer: React.FC = () => {
   return (
     <div className="code-viewer">
       <div className="code-viewer-header">
-        <span className="code-file-count">{fileNames.length} 个文件</span>
+        <span className="code-file-count">{fileNames.length} 个文件 · 已保存至 generated/ 目录</span>
         <div>
           <Tooltip title="复制当前文件">
             <Button size="small" icon={<CopyOutlined />} onClick={handleCopy} />

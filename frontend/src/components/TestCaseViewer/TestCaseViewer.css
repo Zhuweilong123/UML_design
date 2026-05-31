@@ -5,6 +5,19 @@
   overflow: hidden;
 }
 
+.testcase-viewer.embedded {
+  background: #fff;
+}
+
+.testcase-viewer.embedded .testcase-header {
+  background: #fafafa;
+}
+
+.testcase-viewer.embedded .testcase-table {
+  flex: 1;
+  overflow: auto;
+}
+
 .testcase-header {
   display: flex;
   justify-content: space-between;

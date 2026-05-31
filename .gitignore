@@ -30,3 +30,6 @@ backend/.env
 # Cache
 /tmp/
 *.log
+
+# Generated code (large, regenerated on each pipeline run)
+/generated/
