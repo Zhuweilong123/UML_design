@@ -1,0 +1,32 @@
+# Dependencies
+frontend/node_modules/
+frontend/dist/
+
+# Python
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/api/__pycache__/
+backend/app/core/__pycache__/
+backend/app/models/__pycache__/
+backend/app/services/__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+backend/.env
+
+# Logs
+*.log
+/tmp/
+
+# Cache
+/tmp/
+*.log

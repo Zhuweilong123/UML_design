@@ -1,0 +1,10 @@
+[2026-05-30 22:19:32] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-30 22:19:32] load | File: testCases.xlsx
+  Comment: Loaded: testCases.xlsx
+[2026-05-30 22:19:34] switch_sheet | File: testCases.xlsx | Sheet: BaseTask
+  Comment: Switched to sheet: BaseTask
+[2026-05-30 22:19:36] switch_sheet | File: testCases.xlsx | Sheet: OtaTask
+  Comment: Switched to sheet: OtaTask
+[2026-05-30 22:19:38] switch_sheet | File: testCases.xlsx | Sheet: 用例概览
+  Comment: Switched to sheet: 用例概览

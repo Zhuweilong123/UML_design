@@ -1,0 +1,181 @@
+"""Pipeline API – manage and run the 7-stage automation pipeline."""
+
+import asyncio
+import json
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+
+from app.models.uml import UmlDiagram
+from app.models.pipeline import (
+    PipelineCreateRequest, ConfirmRequest, PipelineState,
+)
+from pydantic import BaseModel
+
+from app.services.pipeline_service import (
+    create_pipeline, get_pipeline, confirm_stage,
+    run_pipeline, resume_pipeline, resume_with_instructions,
+    stop_pipeline, _is_stopped, _update_stage,
+)
+from app.models.pipeline import StageName, StageStatus
+
+
+class CreatePipelineBody(BaseModel):
+    diagram_id: str
+    auto_confirm: bool = False
+    diagram: UmlDiagram
+
+router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
+
+
+@router.post("/create")
+async def create_pipeline_endpoint(body: CreatePipelineBody):
+    """Create a new pipeline for a diagram."""
+    state = create_pipeline(body.diagram_id, body.diagram)
+    return {"pipeline": state.model_dump()}
+
+
+@router.get("/{pipeline_id}")
+async def get_pipeline_endpoint(pipeline_id: str):
+    """Get pipeline state."""
+    state = get_pipeline(pipeline_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    return {"pipeline": state.model_dump()}
+
+
+@router.post("/{pipeline_id}/confirm")
+async def confirm_stage_endpoint(pipeline_id: str, req: ConfirmRequest):
+    """Confirm or reject a pipeline stage."""
+    state = confirm_stage(pipeline_id, req.stage, req.accepted, req.comment)
+    return {"pipeline": state.model_dump()}
+
+
+@router.post("/{pipeline_id}/resume")
+async def resume_pipeline_endpoint(
+    pipeline_id: str,
+    diagram: UmlDiagram,
+    language: str = "python",
+):
+    """Resume pipeline from dev_confirm stage (after user confirms)."""
+    state = get_pipeline(pipeline_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    results = []
+    async for event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True):
+        results.append(event)
+    return {"events": results, "pipeline": get_pipeline(pipeline_id).model_dump()}
+
+
+@router.websocket("/ws/{pipeline_id}")
+async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
+    """WebSocket endpoint for real-time pipeline progress."""
+    await ws.accept()
+
+    # Read diagram from the first message
+    data = await ws.receive_text()
+    msg = json.loads(data)
+    diagram = UmlDiagram(**msg.get("diagram", {}))
+    language = msg.get("language", "python")
+    auto_confirm = msg.get("auto_confirm", False)
+
+    state = get_pipeline(pipeline_id) or create_pipeline(pipeline_id, diagram)
+
+    # Background task to listen for stop messages
+    stop_requested = False
+
+    async def listen_for_commands():
+        nonlocal stop_requested
+        try:
+            while True:
+                raw = await asyncio.wait_for(ws.receive_text(), timeout=0.5)
+                msg = json.loads(raw)
+                if msg.get("action") == "stop":
+                    stop_requested = True
+                    stop_pipeline(pipeline_id)
+                    await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                    return
+                elif msg.get("action") == "confirm":
+                    confirm_stage(
+                        pipeline_id,
+                        msg.get("stage", "dev_confirm"),
+                        msg.get("accepted", False),
+                        msg.get("comment", ""),
+                    )
+                    async for resume_event in resume_pipeline(
+                        pipeline_id, diagram, language, auto_confirm=True
+                    ):
+                        if _is_stopped(pipeline_id):
+                            await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                            return
+                        await ws.send_json(resume_event)
+                    break
+        except asyncio.TimeoutError:
+            pass
+        except WebSocketDisconnect:
+            pass
+
+    # Track whether we need instructions
+    instructions = ""
+
+    async def wait_for_instructions():
+        """Wait for user to provide optimization instructions."""
+        nonlocal instructions
+        try:
+            while True:
+                raw = await ws.receive_text()
+                msg = json.loads(raw)
+                if msg.get("action") == "stop":
+                    stop_pipeline(pipeline_id)
+                    await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                    return False
+                elif msg.get("action") == "submit_instructions":
+                    instructions = msg.get("instructions", "")
+                    async for resume_event in resume_with_instructions(
+                        pipeline_id, diagram, instructions, language
+                    ):
+                        if _is_stopped(pipeline_id):
+                            await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                            return False
+                        await ws.send_json(resume_event)
+                        if resume_event.get("stage") == "dev_confirm":
+                            return True  # continue to wait_for_confirm
+                    return False
+                elif msg.get("action") == "skip_instructions":
+                    # Skip Stage 1, jump directly to Stage 2 (Dev Confirm) → Stage 3 (Code Gen)
+                    pipeline = get_pipeline(pipeline_id)
+                    if pipeline:
+                        yield_event = await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.SKIPPED, "Skipped by user")
+                        await ws.send_json(yield_event)
+                        yield_event = await _update_stage(pipeline, StageName.DEV_CONFIRM, StageStatus.SUCCESS, "Auto-confirmed (skipped optimization)")
+                        await ws.send_json(yield_event)
+                        async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True):
+                            if _is_stopped(pipeline_id):
+                                await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                                return False
+                            await ws.send_json(resume_event)
+                    return False
+        except WebSocketDisconnect:
+            return False
+
+    try:
+        async for event in run_pipeline(pipeline_id, diagram, language, auto_confirm):
+            if stop_requested or _is_stopped(pipeline_id):
+                await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
+                break
+            await ws.send_json(event)
+
+            # If waiting for instructions, pause and collect
+            if event.get("event") == "request_instructions":
+                need_confirm = await wait_for_instructions()
+                if need_confirm:
+                    await listen_for_commands()
+                break
+
+            # If waiting for dev_confirm, start listening for commands
+            if event.get("stage") == "dev_confirm" and not auto_confirm:
+                await listen_for_commands()
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        await ws.send_json({"event": "error", "error": str(e)})

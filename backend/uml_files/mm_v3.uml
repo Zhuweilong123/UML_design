@@ -1,0 +1,410 @@
+{
+  "version": "1.0",
+  "name": "Untitled",
+  "classes": [
+    {
+      "id": "class_1780061050311_lb7790",
+      "name": "OtaTask",
+      "stereotype": "class",
+      "attributes": [
+        {
+          "name": "isRandom",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "clearCrowAccumulation",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "clearScheduledCrow",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "execute",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        }
+      ],
+      "position": {
+        "x": 20.0,
+        "y": 140.0
+      },
+      "size": {
+        "width": 200.0,
+        "height": 150.0
+      },
+      "note": "升级任务\n1/升级任务是随机的，升级可以清除鸡叫时间累计和预约的鸡叫请求"
+    },
+    {
+      "id": "class_1780061055677_g3krq5",
+      "name": "CrowTask",
+      "stereotype": "class",
+      "attributes": [
+        {
+          "name": "intervalDays",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "scheduledTime",
+          "type": "association",
+          "visibility": "#",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "isInterruptible",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "crowFlag",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "scheduleNextCrow",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "clearCrowFlag",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        }
+      ],
+      "position": {
+        "x": 0.0,
+        "y": -311.38766100853485
+      },
+      "size": {
+        "width": 200.0,
+        "height": 150.0
+      },
+      "note": "鸡叫任务\n1/每七天鸡叫一次，到达鸡叫时间，预约最近的2:00到4:00之间随机鸡叫\n2/鸡叫不可打断，鸡叫标志可清除"
+    },
+    {
+      "id": "class_1780061071670_hbisqo",
+      "name": "TaskScheduler",
+      "stereotype": "class",
+      "attributes": [
+        {
+          "name": "taskList",
+          "type": "association",
+          "visibility": "-",
+          "default_value": null,
+          "is_static": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "addTask",
+          "return_type": "void",
+          "params": "Task task",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "removeTask",
+          "return_type": "void",
+          "params": "Task task",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "executeTasks",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "interruptTask",
+          "return_type": "void",
+          "params": "Task task",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "resumeTask",
+          "return_type": "void",
+          "params": "Task task",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        }
+      ],
+      "position": {
+        "x": -300.0,
+        "y": -100.0
+      },
+      "size": {
+        "width": 200.0,
+        "height": 200.0
+      },
+      "note": "调度器管理所有任务，支持中断和恢复"
+    },
+    {
+      "id": "class_1780061210919_ig6huh",
+      "name": "MM_APP",
+      "stereotype": "class",
+      "attributes": [
+        {
+          "name": "appName",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "version",
+          "type": "association",
+          "visibility": "+",
+          "default_value": null,
+          "is_static": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "start",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "stop",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        }
+      ],
+      "position": {
+        "x": -300.0,
+        "y": -311.38766100853485
+      },
+      "size": {
+        "width": 200.0,
+        "height": 150.0
+      },
+      "note": ""
+    },
+    {
+      "id": "class_1780061312345_sentinel",
+      "name": "SentinelTask",
+      "stereotype": "class",
+      "attributes": [
+        {
+          "name": "isInterrupted",
+          "type": "association",
+          "visibility": "-",
+          "default_value": "false",
+          "is_static": false
+        },
+        {
+          "name": "interruptedBy",
+          "type": "association",
+          "visibility": "-",
+          "default_value": null,
+          "is_static": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "execute",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "interrupt",
+          "return_type": "void",
+          "params": "String source",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        },
+        {
+          "name": "resume",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        }
+      ],
+      "position": {
+        "x": 20.0,
+        "y": -100.0
+      },
+      "size": {
+        "width": 200.0,
+        "height": 180.0
+      },
+      "note": "哨兵任务，运行时可被CrowTask和OtaTask打断，打断后恢复执行"
+    },
+    {
+      "id": "class_1780061312345_base",
+      "name": "BaseTask",
+      "stereotype": "abstract",
+      "attributes": [
+        {
+          "name": "taskId",
+          "type": "association",
+          "visibility": "#",
+          "default_value": null,
+          "is_static": false
+        },
+        {
+          "name": "status",
+          "type": "association",
+          "visibility": "#",
+          "default_value": "\"idle\"",
+          "is_static": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "execute",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": true
+        },
+        {
+          "name": "cancel",
+          "return_type": "void",
+          "params": "",
+          "visibility": "+",
+          "is_static": false,
+          "is_abstract": false
+        }
+      ],
+      "position": {
+        "x": 420.0,
+        "y": -280.0
+      },
+      "size": {
+        "width": 200.0,
+        "height": 150.0
+      },
+      "note": "任务基类，所有具体任务继承此类"
+    }
+  ],
+  "relations": [
+    {
+      "id": "rel_1780061271534_8hqacf",
+      "source": "class_1780061071670_hbisqo",
+      "target": "class_1780061210919_ig6huh",
+      "type": "aggregation",
+      "multiplicity_source": "",
+      "multiplicity_target": "",
+      "role_name": "",
+      "note": ""
+    },
+    {
+      "id": "rel_1780061312345_interrupt_from_crow",
+      "source": "class_1780061055677_g3krq5",
+      "target": "class_1780061312345_sentinel",
+      "type": "dependency",
+      "multiplicity_source": "",
+      "multiplicity_target": "",
+      "role_name": "",
+      "note": "CrowTask可打断SentinelTask"
+    },
+    {
+      "id": "rel_1780061312345_interrupt_from_ota",
+      "source": "class_1780061050311_lb7790",
+      "target": "class_1780061312345_sentinel",
+      "type": "dependency",
+      "multiplicity_source": "",
+      "multiplicity_target": "",
+      "role_name": "",
+      "note": "OtaTask可打断SentinelTask"
+    },
+    {
+      "id": "rel_1780061312345_inherit_crow",
+      "source": "class_1780061055677_g3krq5",
+      "target": "class_1780061312345_base",
+      "type": "inheritance",
+      "multiplicity_source": "",
+      "multiplicity_target": "",
+      "role_name": "",
+      "note": ""
+    },
+    {
+      "id": "rel_1780061312345_inherit_ota",
+      "source": "class_1780061050311_lb7790",
+      "target": "class_1780061312345_base",
+      "type": "inheritance",
+      "multiplicity_source": "",
+      "multiplicity_target": "",
+      "role_name": "",
+      "note": ""
+    },
+    {
+      "id": "rel_1780061312345_inherit_sentinel",
+      "source": "class_1780061312345_sentinel",
+      "target": "class_1780061312345_base",
+      "type": "inheritance",
+      "multiplicity_source": "",
+      "multiplicity_target": "",
+      "role_name": "",
+      "note": ""
+    },
+    {
+      "id": "rel_1780061312345_base_to_scheduler",
+      "source": "class_1780061312345_base",
+      "target": "class_1780061071670_hbisqo",
+      "type": "aggregation",
+      "multiplicity_source": "1",
+      "multiplicity_target": "*",
+      "role_name": "",
+      "note": "基类通过表驱动注册派生类到调度器"
+    }
+  ],
+  "grid_visible": true,
+  "grid_size": 20,
+  "snap_to_grid": true,
+  "zoom": 1.0,
+  "pan_x": 0.0,
+  "pan_y": 0.0
+}

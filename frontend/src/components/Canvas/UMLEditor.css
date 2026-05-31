@@ -1,0 +1,90 @@
+.uml-canvas-container {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+/* ── UML Class Node Styling ────────────────────────── */
+.uml-class-node {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.uml-class-node.selected {
+  outline: 2px solid #1890ff;
+  border-radius: 4px;
+}
+
+.uml-stereotype {
+  font-size: 10px;
+  color: #888;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.uml-class-header {
+  text-align: center;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 2px 0;
+  color: #1a1a1a;
+  flex-shrink: 0;
+}
+
+.uml-class-name {
+  word-wrap: break-word;
+}
+
+.uml-class-divider {
+  height: 1px;
+  background: #d9d9d9;
+  margin: 2px 0;
+  flex-shrink: 0;
+}
+
+.uml-class-attrs,
+.uml-class-methods {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.uml-attr,
+.uml-method {
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #333;
+}
+
+.uml-empty {
+  color: #bbb;
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* ── X6 Port visibility ────────────────────────────── */
+.x6-node .x6-port-body circle {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.x6-node:hover .x6-port-body circle {
+  opacity: 1;
+}
+
+/* ── X6 overrides ──────────────────────────────────── */
+.x6-node {
+  border: none !important;
+}
+
+.x6-edge .x6-edge-label {
+  font-size: 10px;
+  fill: #666;
+}
