@@ -90,24 +90,46 @@ def _build_test_prompt(code_files: dict[str, str], language: str, test_cases: st
     )
 
     if test_cases and test_cases.strip():
-        cases_section = f"""## Test Case Requirements (MUST cover every case below):
+        # When test cases are provided, make them the PRIMARY driver (not the source code)
+        prompt = f"""You MUST generate unit tests for {language}. Follow these rules EXACTLY.
+
+## YOUR PRIMARY TASK: ONE test function per case ID below
+
+For EACH case ID in the test case list below, you MUST create exactly one test function.
+The function name MUST be: `test_<CASE_ID>_<short_description>`
+
+Example mapping:
+  TC-OTA-001 "OtaTask.execute normal execution" → `def test_TC_OTA_001_ota_execute():`
+  TC-CROW-002 "crow time window 2:00-4:00" → `def test_TC_CROW_002_crow_time_window():`
+  TC-BASE-001 "subclass instantiation" → `def test_TC_BASE_001_subclass_instantiation():`
+
+## TEST CASES (MUST cover ALL of these):
 {test_cases[:4000]}
 
-## CRITICAL RULES:
-1. Create ONE test function for EACH test case ID. The function name MUST contain the test case ID.
-   Example: For TC-OTA-001 "OtaTask.execute normal execution", create `def test_TC_OTA_001_ota_execute():`
-2. In each test function's docstring, include the full test case details (steps + expected result).
-3. Write tests using the standard testing framework for {language}.
-4. Return the result as a JSON object mapping test filenames to content:
+## Reference Source Code (understand the classes being tested):
+{code_block[:3000]}
+
+## OUTPUT REQUIREMENTS:
+1. Return ONLY a JSON object mapping filenames to file content.
+2. Each test function's docstring MUST include: Case ID, test steps, and expected result.
+3. Use the standard testing framework for {language}.
+4. Group test functions logically — one file per source module when possible.
+
+Output format:
 ```json
-{{"test_filename.ext": "content..."}}
+{{"test_module1.ext": "code...", "test_module2.ext": "code..."}}
 ```
-Only output the JSON object, no other text.
 """
     else:
-        cases_section = f"""## Requirements:
+        prompt = f"""Generate comprehensive unit tests for the following {language} code.
+
+## Source Code:
+{code_block}
+
+## Requirements:
 - Write tests using the standard testing framework for {language}.
 - Cover all public methods and edge cases.
+- Each test function name MUST describe the scenario (e.g., `test_classname_method_scenario`).
 - Return the result as a JSON object mapping test filenames to content:
 ```json
 {{"test_filename.ext": "content..."}}
@@ -115,12 +137,7 @@ Only output the JSON object, no other text.
 Only output the JSON object, no other text.
 """
 
-    return f"""Generate comprehensive unit tests for the following {language} code.
-
-## Source Code:
-{code_block}
-
-{cases_section}"""
+    return prompt
 
 
 async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
@@ -156,10 +173,6 @@ async def generate_tests(
     code_files: dict[str, str], language: str, test_cases: str = ""
 ) -> dict[str, str]:
     """Generate test files for the given code, optionally using Excel test case requirements."""
-    import sys
-    msg = f"[generate_tests] test_cases length: {len(test_cases) if test_cases else 0}, first 100: {test_cases[:100] if test_cases else '(EMPTY)'}"
-    print(msg, flush=True)
-    sys.stderr.write(msg + '\n')
     prompt = _build_test_prompt(code_files, language, test_cases)
     response = await chat(
         prompt=prompt,

@@ -77,19 +77,38 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     setLoading(false);
   };
 
+  /** Find column index by header name (case-insensitive partial match) */
+  const findCol = (headers: string[], keywords: string[]): number => {
+    return headers.findIndex(h => keywords.some(kw => h.toLowerCase().includes(kw.toLowerCase())));
+  };
+
   const buildAndSaveSummary = (sheetsData: Record<string, SheetData>) => {
     const lines: string[] = [];
     for (const [sname, sdata] of Object.entries(sheetsData)) {
       const headers = sdata.headers || [];
       const rows = sdata.rows || [];
       if (rows.length === 0) continue;
+
+      // Use column name matching instead of hardcoded indices
+      const idCol = findCol(headers, ['用例id', 'caseid', 'case_id', 'id']);
+      const nameCol = findCol(headers, ['用例名称', '名称', 'name', 'title']);
+      const priorityCol = findCol(headers, ['优先级', 'priority']);
+      const stepsCol = findCol(headers, ['测试步骤', '步骤', 'steps', '操作']);
+      const expectedCol = findCol(headers, ['预期结果', '预期', 'expected', '期望']);
+
+      // Skip summary sheets that don't contain case IDs (e.g., "模块" overview sheet)
+      if (idCol < 0 || nameCol < 0) {
+        console.log(`[TestCaseViewer] Skipping sheet "${sname}" — no case ID or name column found`);
+        continue;
+      }
+
       lines.push(`## Sheet: ${sname}`);
       for (const row of rows) {
-        const id = row[headers[0]] || '';
-        const name = row[headers[1]] || '';
-        const priority = row[headers[2]] || '';
-        const steps = row[headers[4]] || '';
-        const expected = row[headers[5]] || '';
+        const id = row[headers[idCol]] || '';
+        const name = row[headers[nameCol]] || '';
+        const priority = priorityCol >= 0 ? (row[headers[priorityCol]] || '') : '';
+        const steps = stepsCol >= 0 ? (row[headers[stepsCol]] || '') : '';
+        const expected = expectedCol >= 0 ? (row[headers[expectedCol]] || '') : '';
         if (id && name) {
           lines.push(`- [${id}] ${name} (${priority})\n  Steps: ${steps}\n  Expected: ${expected}`);
         }
@@ -121,7 +140,9 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     setSheets(updatedSheets);
 
     // Track change
-    const caseId = row[sheets[activeSheet].headers[0]] || `row_${rowIndex}`;
+    const activeHeaders = sheets[activeSheet].headers;
+    const caseIdCol = findCol(activeHeaders, ['用例id', 'caseid', 'case_id', 'id']);
+    const caseId = caseIdCol >= 0 ? (row[activeHeaders[caseIdCol]] || `row_${rowIndex}`) : `row_${rowIndex}`;
     setChangedCases(prev => {
       const existing = prev.find(c => c.sheet === activeSheet && c.row === rowIndex && c.field === key);
       if (existing) {

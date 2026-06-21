@@ -199,7 +199,9 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                                 s.status = StageStatus.SUCCESS
                         # Store test case data from frontend for Stage 5
                         tc = msg.get("test_cases", "")
+                        print(f"[Pipeline] confirm_case_review received: test_cases length={len(tc)}, preview={tc[:200] if tc else '(EMPTY)'}", flush=True)
                         pipeline.stages[3].result = {"test_cases": tc}
+                        print(f"[Pipeline] Stored test_cases in stages[3].result: {len(tc)} chars", flush=True)
                         print(f"[Pipeline] Stored test_cases: {len(tc)} chars", flush=True)
                         await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
                     # Resume from Stage 5 (Test Gen), skip case review

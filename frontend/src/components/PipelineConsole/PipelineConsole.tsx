@@ -29,6 +29,7 @@ const PipelineConsole: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
   const [currentAction, setCurrentAction] = useState('');
+  const testCaseData = useUiStore(s => s.testCaseData);
   const [instructionsVisible, setInstructionsVisible] = useState(false);
   const [pipelineInstructions, setPipelineInstructions] = useState('');
   const [completed, setCompleted] = useState(false);
@@ -168,6 +169,12 @@ const PipelineConsole: React.FC = () => {
   const handleConfirmCaseReview = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     const testCases = useUiStore.getState().testCaseData;
+    console.log('[Pipeline] confirm_case_review: testCaseData length =', testCases?.length || 0);
+    console.log('[Pipeline] testCaseData preview:', testCases?.substring(0, 300) || '(EMPTY)');
+    if (!testCases || testCases.trim().length === 0) {
+      message.warning('用例数据为空！请先在主画布中打开测试Excel文件并检视用例，再点击确认。');
+      return;
+    }
     wsRef.current.send(JSON.stringify({
       action: 'confirm_case_review',
       test_cases: testCases,
@@ -317,6 +324,9 @@ const PipelineConsole: React.FC = () => {
           {isWaitingCaseReview && (
             <div className="confirm-card" style={{ background: '#e6f7ff', borderColor: '#91d5ff' }}>
               <p>请在主画布中检视并修改测试用例，完成后点击确认继续</p>
+              <p style={{ fontSize: 12, color: testCaseData ? '#52c41a' : '#faad14' }}>
+                用例数据: {testCaseData ? `${testCaseData.split('\n').filter(l => l.startsWith('- [')).length} 条用例 ✓` : '等待加载...'}
+              </p>
               <Space>
                 <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleConfirmCaseReview}>
                   检视完成，继续

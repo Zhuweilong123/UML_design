@@ -137,16 +137,40 @@ class TestGenRequest(BaseModel):
 async def generate_test_code(req: TestGenRequest):
     """Generate test code based on test cases (full or incremental)."""
     # Build a summary of test cases
+    def _find_col(headers: list, keywords: list[str]) -> int:
+        """Find column index by header name (case-insensitive partial match)."""
+        for i, h in enumerate(headers):
+            hl = h.lower()
+            if any(kw.lower() in hl for kw in keywords):
+                return i
+        return -1
+
     case_summaries = []
     for sname, data in req.sheets.items():
         headers = data.get("headers", [])
+        if not headers:
+            continue
         rows = data.get("rows", [])
+        if not rows:
+            continue
+
+        # Use column name matching instead of hardcoded indices
+        id_col = _find_col(headers, ['用例id', 'caseid', 'case_id', 'id'])
+        name_col = _find_col(headers, ['用例名称', '名称', 'name', 'title'])
+        priority_col = _find_col(headers, ['优先级', 'priority'])
+        steps_col = _find_col(headers, ['测试步骤', '步骤', 'steps', '操作'])
+        expected_col = _find_col(headers, ['预期结果', '预期', 'expected', '期望'])
+
+        # Skip summary/overview sheets that don't contain case IDs
+        if id_col < 0 or name_col < 0:
+            continue
+
         for row in rows:
-            case_id = row.get(headers[0], "") if headers else ""
-            case_name = row.get(headers[1], "") if len(headers) > 1 else ""
-            priority = row.get(headers[2], "") if len(headers) > 2 else ""
-            steps = row.get(headers[4], "") if len(headers) > 4 else ""
-            expected = row.get(headers[5], "") if len(headers) > 5 else ""
+            case_id = row.get(headers[id_col], "")
+            case_name = row.get(headers[name_col], "")
+            priority = row.get(headers[priority_col], "") if priority_col >= 0 else ""
+            steps = row.get(headers[steps_col], "") if steps_col >= 0 else ""
+            expected = row.get(headers[expected_col], "") if expected_col >= 0 else ""
             case_summaries.append(
                 f"[{case_id}] {case_name} (Priority: {priority})\n  Steps: {steps}\n  Expected: {expected}"
             )
