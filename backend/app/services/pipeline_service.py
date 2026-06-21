@@ -295,6 +295,10 @@ def _save_generated_files(project_name: str, language: str, src: dict, test: dic
 
     if test:
         test_dir = os.path.join(base, "test", safe_name, language)
+        # Clean old test files to avoid stale tests being collected by pytest
+        if os.path.exists(test_dir):
+            import shutil
+            shutil.rmtree(test_dir)
         os.makedirs(test_dir, exist_ok=True)
         for fname, content in test.items():
             fp = os.path.join(test_dir, fname)
@@ -444,6 +448,11 @@ async def run_pipeline(
     yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
     try:
         current_code = await generate_code(optimized_diagram, language)
+        if not current_code:
+            logger.error("[Pipeline Stage 3] generate_code returned empty — LLM JSON parse likely failed")
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
+                                       "Code generation failed: LLM returned no valid code files")
+            return
         for fname, content in current_code.items():
             pipeline.code_artifacts.append(CodeArtifact(
                 language=language, filename=fname, content=content,
@@ -620,8 +629,6 @@ async def _run_test_and_optimize(
         test_results_text = new_test_results
 
     else:
-        final_test_results = await _execute_tests(test_files, language, diagram.name)
-        pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": final_test_results}
         yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.SUCCESS,
                                    "Max optimization rounds reached")
 
@@ -968,12 +975,8 @@ async def _execute_tests(test_files: dict[str, str], language: str, project_name
         logger.info(f"[TestExec] Source files on disk: {[f.name for f in disk_src if f.is_file()]}")
 
     if not test_dir.exists() or not any(test_dir.iterdir()):
-        logger.warning(f"[TestExec] Test directory empty or missing, using LLM simulation fallback")
-        test_code = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in test_files.items())
-        return await chat(
-            f"Predict test results:\n\n{test_code}\n\nOutput: Test: name -> PASS/FAIL",
-            system_prompt="You are a test execution simulator.", temperature=0.3
-        )
+        logger.error(f"[TestExec] Test directory empty or missing: {test_dir}")
+        return "Error: No test files found on disk. Test generation may have failed."
 
     # Build environment with PYTHONPATH including both src and test dirs
     env = os.environ.copy()
@@ -1231,6 +1234,11 @@ async def resume_pipeline(
         test_cases_data = (pipeline.stages[3].result or {}).get("test_cases", "") if pipeline.stages[3].result else ""
         logger.info(f"[Pipeline Stage 5] test_cases_data present: {bool(test_cases_data)}, length: {len(test_cases_data) if test_cases_data else 0}")
         test_files = await generate_tests(current_code, language, test_cases_data)
+        if not test_files:
+            logger.error("[Pipeline Stage 5] generate_tests returned empty — LLM JSON parse likely failed")
+            yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED,
+                                       "Test generation failed: LLM returned no valid test files")
+            return
         for fname, content in test_files.items():
             pipeline.code_artifacts.append(CodeArtifact(
                 language=language, filename=fname, content=content, version=2,

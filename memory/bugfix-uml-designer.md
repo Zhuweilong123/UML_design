@@ -46,6 +46,16 @@ metadata:
 | 31 | 生成的测试用例不包含用例ID | ① Sheet "用例概览" 污染 ② 列索引硬编码 ③ LLM 提示词源码优先于用例 | LLM/后端 |
 | 32 | 后端代码修改后不生效 | 多个僵尸 Python 进程占 8000 端口，StatReload 重载不到新代码 | 环境 |
 | 33 | Python 3.14 PYTHONUTF8 崩溃 | `set PYTHONUTF8=1` 触发 fatal error，改用 `-X utf8` | 环境/Python |
+| 34 | Stage 6/7 LLM 模拟测试不可靠 | `_execute_tests()` LLM猜PASS/FAIL，每次不同 → 改真实pytest subprocess | 后端/流水线 |
+| 35 | Stage 6 ReAct 盲修测试 | Action解析失败、工具bug → 去掉ReAct，简化为LLM一次性编译修复 | 后端/流水线 |
+| 36 | Path.parent 路径算错 | Python 3.9+ `Path(".").parent` 返回自身 → 全改 `.resolve().parent.parent` | 后端 |
+| 37 | 改代码不生效 | `.pyc` 缓存优先源码 → `sys.dont_write_bytecode = True` | 后端/环境 |
+| 38 | 测试数量不一致 | `new_test_results[:2000]` 截断 → 去截断、展示上限提到5000 | 后端/流水线 |
+| 39 | 失败原因无法提取 | regex 不兼容 `\r\n` + pytest格式 → 三策略递进匹配 | 后端/流水线 |
+| 40 | 测试文件保存不清理旧文件 | JSON解析失败fallback存非法.py，旧文件残留被pytest收集 | 后端/流水线 |
+| 41 | 最终测试结果和第三轮不一致 | for-else多余的`_execute_tests`覆盖了最后一轮的正确数据 | 后端/流水线 |
+| 42 | 前端转圈不停+进度条不到100% | running/completed独立state手动维护，事件时序问题 | 前端 |
+| 43 | 后端日志缺少时间戳 | uvicorn/logging默认无`asctime` | 后端/日志 |
 
 ---
 
@@ -745,3 +755,117 @@ by tool messages responding to each tool_call_id"
 **根因**: `set PYTHONUTF8=1` 在 Python 3.14 被拒绝。
 
 **解决**: 改用 `python -X utf8`。同时修复 `start.bat`: `%~dp0` 替代硬编码、移除全杀进程、`npm run dev`。
+
+---
+
+## 问题34: Stage 6/7 LLM 模拟测试结果不可靠
+
+**现象**: Stage 7 代码优化三轮，通过率在 4%~42% 随机跳变，有时负优化。
+
+**根因**: `_execute_tests()` 把测试代码发给 LLM 让它"猜" PASS/FAIL。LLM 无 Python 运行时，结果完全随机。
+
+**解决**: 用 `asyncio.create_subprocess_exec` 跑真实 `pytest -v --tb=short`，PYTHONPATH 确保 import。pytest 不可用时回退 LLM 模拟。
+
+## 问题35: Stage 6 用 ReAct 盲修测试代码
+
+**现象**: Stage 6 跑 2 轮 ReAct，大量 "No action parsed" 解析失败。
+
+**根因**: ReAct action 解析（`_parse_action`）对 DeepSeek 格式匹配差；`diff_code` lambda 参数 bug。
+
+**解决**: 去掉 `ReActEngine`/`ReActResult`。简化为：pytest → 提取编译错误 → LLM 一次性修复 → 重跑，最多2轮。失败阻断。
+
+## 问题36: `Path(".").parent` 在 Python 3.13 不往上走
+
+**现象**: "Test directory empty or missing"，文件明明存在。
+
+**根因**: Python 3.9+ `Path(".").parent` 返回 `"."` 自身。`.parent.parent` 路径算错。
+
+**解决**: 全部改为 `.resolve().parent.parent`，先展开绝对路径再取父目录。
+
+## 问题37: `__pycache__` 导致改代码不生效
+
+**现象**: 改后端代码重启后行为不变。
+
+**根因**: `.pyc` 缓存优先于源码，修改 `.py` 后缓存未失效。
+
+**解决**: `main.py` 加 `sys.dont_write_bytecode = True` 禁止生成 `.pyc`。
+
+## 问题38: 测试结果截断导致数量不一致
+
+**现象**: "47 通过 / 47 总计" 但 "全部通过 (39 个)"，数量矛盾。
+
+**根因**: `new_test_results[:2000]` — 47 条 ~3055 字符被截到 2000。"47" 用预计算整数，"(39)" 从截断文本实时统计。
+
+**解决**: 轮次记录去截断，Stage 6 展示上限提到 5000。
+
+## 问题39: pytest 失败原因无法提取
+
+**现象**: 日志只显示 "Test: xxx -> FAIL"，无失败原因。
+
+**根因**: `_extract_failure_reason()` regex 不兼容 Windows `\r\n` 和 pytest `--tb=short` 的 `FAILURES` 段落。
+
+**解决**: 三策略递进匹配 `E   ErrorType: message`，regex 全用 `\r?\n`。
+
+---
+
+## 新需求: 流水线日志文件级统计
+
+Stage 7 每轮末尾加各文件 PASS/FAIL 表格。`_build_per_file_stats()` 按用例 ID 前缀（`TC_BASE`→BaseTask...）映射模块名，统计每文件通过率。
+
+## 新需求: 后端日志加时间戳
+
+`main.py` 配置 `logging.basicConfig(format="%(asctime)s | ...")` + 覆盖 uvicorn `LOGGING_CONFIG`。
+
+## 新需求: UML 类图备注传递到代码生成
+
+`_build_class_prompt` 加入 `c.note`（Business Rules）、关系元数据。`optimize_uml` 加规则保留 note。`_build_test_prompt` 加 `_extract_api_signatures()` 提取源码 API 签名。
+
+---
+
+## 问题40: 测试文件保存不清理旧文件导致残留
+
+**现象**: 最新生成的测试用例是有问题的（LLM JSON 解析失败，原始响应被存成 .py），但 pytest 竟然跑起来了，显示 46 PASS。
+
+**根因**: 
+1. `generate_tests()` 的 `except JSONDecodeError` fallback 把 LLM 原始 JSON 响应存为 `test_main.py`（内容以 ```json 开头，不是合法 Python）
+2. `_save_generated_files()` 只写新文件不删旧文件，上次残留的有效 `.py` 文件被 pytest 收集执行
+
+**解决**: 
+1. `generate_tests`/`generate_code` 的 JSON 解析失败 fallback 改为返回空 `{}`，记录 warning 日志
+2. `_save_generated_files` 写测试文件前 `shutil.rmtree(test_dir)` 清空目录
+3. `generate_tests`/`generate_code` 返回空时 Stage 3/5 标 FAILED 并阻断
+4. `_execute_tests` 目录为空时直接报错，不用 LLM 模拟
+
+**Why:** 三条防线确保：要么成功生成、要么明确失败，不存在"看起来跑了其实是旧数据"的假象。
+
+## 问题41: 最终测试结果和第三轮不一致
+
+**现象**: 流水线日志 Round 3 显示 49% 通过率，但"最终测试结果"显示 21%。
+
+**根因**: Stage 7 的 for-else 结构中，`else` 分支在 3 轮循环结束后额外调用了一次 `_execute_tests`，将 `pipeline.stages[5].result["test_results"]` 覆盖为新值。这次额外的 pytest 调用结果与第三轮不同（21% vs 49%），导致 `_save_pipeline_log` 读到的最终数据被污染。
+
+**解决**: 删除 `else` 分支中多余的 `_execute_tests` 调用。"最终测试结果"直接用最后一轮的数据，不需要额外跑一次 pytest。
+
+**Why:** for-else 被误用为"兜底调用"，但数据已在循环内正确保存，else 的重复调用反而覆盖了正确结果。
+
+## 问题42: 前端流水线完成后转圈不停 + 进度条不到100%
+
+**现象**: Stage 7 全部完成后 Loading 图标一直转；进度条停在 86% 不达 100%。
+
+**根因**: 
+1. `running`/`completed` 是独立 state，靠 WS 事件回调手动切换。`pipeline_complete` 将 `manualRunning` 置 false 后，`completed = manualRunning && allStagesTerminal` 跟着变 false
+2. `completedStages` 只计 `SUCCESS` 不计 `SKIPPED`/`FAILED`（Stage 1 被跳过 → 6/7 = 86%）
+
+**解决**: `running` 和 `showCompleted` 从 pipeline 阶段状态直接推导，不依赖 `manualRunning`。`completedStages` 计入 `SKIPPED`/`FAILED`。
+
+**Why:** 派生状态（derived state）优于手动维护的独立状态，避免事件时序问题导致的不一致。
+
+## 问题43: 后端日志缺少时间戳
+
+**现象**: 后端 uvicorn 和 logging 输出没有任何时间信息。
+
+**根因**: uvicorn 默认日志格式和 Python `logging` 默认格式都不含 `%(asctime)s`。
+
+**解决**: `main.py` 配置 `logging.basicConfig(format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")` + 覆盖 uvicorn `LOGGING_CONFIG` 的 formatter。
+
+**Why:** 无时间戳导致无法追踪问题发生时间、无法关联流水线日志和后端日志。

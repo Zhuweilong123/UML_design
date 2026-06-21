@@ -223,7 +223,10 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
         cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        return {"main." + _get_extension(language): response}
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[CodeGen] JSON parse failed for code generation, raw response ({len(response)} chars): {response[:300]}")
+        return {}
 
 
 async def generate_tests(
@@ -241,7 +244,11 @@ async def generate_tests(
         cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        return {"test_main." + _get_extension(language): response}
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[TestGen] JSON parse failed for test generation, raw response ({len(response)} chars): {response[:300]}")
+        # Don't save raw response as .py — it's not valid Python code
+        return {}
 
 
 def _normalize_llm_output(data: dict) -> dict:
