@@ -1,5 +1,6 @@
 """LLM integration API – code generation, UML optimization, chat."""
 
+import logging
 from fastapi import APIRouter, HTTPException
 
 from app.models.uml import (
@@ -11,6 +12,8 @@ from app.services.llm_service import chat
 from app.services.code_generator import (
     SUPPORTED_LANGUAGES, generate_code, optimize_uml,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
@@ -48,7 +51,6 @@ async def generate_code_endpoint(req: CodeGenRequest):
 @router.post("/optimize-uml", response_model=UmlOptimizeResponse)
 async def optimize_uml_endpoint(req: UmlOptimizeRequest):
     """Ask LLM to analyze and optimize a UML diagram design."""
-    import traceback
     try:
         result = await optimize_uml(req.diagram, req.instructions)
 
@@ -62,5 +64,5 @@ async def optimize_uml_endpoint(req: UmlOptimizeRequest):
             diff=result.get("diff", ""),
         )
     except Exception as e:
-        traceback.print_exc()
+        logger.exception(f"UML optimization failed: {e}")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")

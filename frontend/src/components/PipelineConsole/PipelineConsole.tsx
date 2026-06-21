@@ -26,14 +26,24 @@ const PipelineConsole: React.FC = () => {
   const { selectedLanguage, activePipelineId, setActivePipelineId } = useUiStore();
 
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
-  const [running, setRunning] = useState(false);
+  const [manualRunning, setManualRunning] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
   const [currentAction, setCurrentAction] = useState('');
   const testCaseData = useUiStore(s => s.testCaseData);
   const [instructionsVisible, setInstructionsVisible] = useState(false);
   const [pipelineInstructions, setPipelineInstructions] = useState('');
-  const [completed, setCompleted] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Derive running/completed from pipeline stage statuses (single source of truth)
+  const allStagesTerminal = pipeline?.stages.every(
+    s => s.status === StageStatus.SUCCESS || s.status === StageStatus.FAILED || s.status === StageStatus.SKIPPED
+  ) ?? false;
+  const hasRunningStage = pipeline?.stages.some(
+    s => s.status === StageStatus.RUNNING
+  ) ?? false;
+  const running = manualRunning && (hasRunningStage || !allStagesTerminal);
+  // completed stays true once all stages are terminal, unaffected by manualRunning reset
+  const showCompleted = allStagesTerminal && (pipeline?.stages.length ?? 0) > 0;
 
   // Load existing pipeline (only when not running, avoid conflicts)
   useEffect(() => {
@@ -82,8 +92,7 @@ const PipelineConsole: React.FC = () => {
       return;
     }
 
-    setRunning(true);
-    setCompleted(false);
+    setManualRunning(true);
     setWsError(null);
     setCurrentAction('正在创建流水线...');
 
@@ -131,27 +140,26 @@ const PipelineConsole: React.FC = () => {
           setCurrentAction('⏳ 等待输入优化需求...');
         } else if (data.event === 'pipeline_complete') {
           message.success('流水线全部完成！');
-          setRunning(false);
-          setCompleted(true);
+          setManualRunning(false);
           setCurrentAction('全部完成');
         } else if (data.event === 'stopped') {
           message.info('流水线已停止');
-          setRunning(false);
+          setManualRunning(false);
           setCurrentAction('已停止');
         } else if (data.event === 'error') {
           setWsError(data.error);
-          setRunning(false);
+          setManualRunning(false);
           setCurrentAction('错误: ' + data.error);
         }
       };
 
       ws.onerror = () => {
         setWsError('WebSocket 连接错误');
-        setRunning(false);
+        setManualRunning(false);
       };
 
       ws.onclose = () => {
-        setRunning(false);
+        setManualRunning(false);
         // Don't append "(连接关闭)" if pipeline already completed
         setCurrentAction((prev) => {
           if (prev.includes('全部完成') || prev.includes('已停止')) return prev;
@@ -160,7 +168,7 @@ const PipelineConsole: React.FC = () => {
       };
     } catch (e) {
       message.error('创建流水线失败: ' + String(e));
-      setRunning(false);
+      setManualRunning(false);
       setCurrentAction('');
     }
   }, [diagram, selectedLanguage, activePipelineId, setActivePipelineId]);
@@ -234,7 +242,7 @@ const PipelineConsole: React.FC = () => {
   });
 
   const completedStages = pipeline?.stages.filter(
-    (s) => s.status === StageStatus.SUCCESS
+    (s) => s.status === StageStatus.SUCCESS || s.status === StageStatus.SKIPPED || s.status === StageStatus.FAILED
   ).length || 0;
 
   const totalStages = pipeline?.stages.length || 7;
@@ -292,9 +300,9 @@ const PipelineConsole: React.FC = () => {
         <>
           <div className="pipeline-progress">
             <Progress
-              percent={completed ? 100 : Math.round((completedStages / totalStages) * 100)}
+              percent={showCompleted ? 100 : Math.round((completedStages / totalStages) * 100)}
               size="small"
-              status={running ? 'active' : completed ? 'success' : undefined}
+              status={running ? 'active' : showCompleted ? 'success' : undefined}
             />
             <span className="round-info">
               优化轮次: {pipeline.optimization_round}/3

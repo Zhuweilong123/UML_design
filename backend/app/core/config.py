@@ -10,10 +10,6 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
 
-    # History
-    max_history_steps: int = 50
-    operation_merge_window_ms: int = 500
-
     # App
     app_name: str = "UML Designer API"
     app_version: str = "1.0.0"

@@ -1,10 +1,9 @@
 """Pipeline orchestration service – manages the 7-stage automation pipeline."""
 
-import asyncio
-import json
 from datetime import datetime
 from typing import AsyncIterator
-
+import json
+import logging
 import os
 from app.models.uml import UmlDiagram
 from app.models.pipeline import (
@@ -13,10 +12,11 @@ from app.models.pipeline import (
 )
 from app.services.llm_service import chat
 from app.services.code_generator import (
-    generate_code, generate_tests, optimize_uml, fix_code,
+    generate_code, generate_tests, optimize_uml,
 )
-from app.services.react_engine import ReActEngine, ReActResult
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: str):
@@ -116,7 +116,7 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
             if test_results:
                 lines.append("**测试执行结果**:")
                 lines.append("```")
-                lines.append(str(test_results)[:1000])
+                lines.append(str(test_results)[:5000])
                 lines.append("```")
                 lines.append("")
 
@@ -130,32 +130,38 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
                 for rd in rounds:
                     rn = rd.get("round", "?")
                     pr = rd.get("pass_rate", 0)
+                    rolled_back = rd.get("rolled_back", False)
                     icon = "🎉" if pr == 100 else "⚠️" if pr >= 80 else "❌"
-                    lines.append(f"#### Round {rn}: {icon} 通过率 {pr}%")
+                    rb_tag = " **[回退]**" if rolled_back else ""
+                    lines.append(f"#### Round {rn}: {icon} 通过率 {pr}%{rb_tag}")
                     lines.append(f"- 用例: {rd.get('passed', 0)} 通过 / {rd.get('failed', 0)} 失败 / {rd.get('total', 0)} 总计")
-                    lines.append(f"- ReAct 摘要: {rd.get('react_summary', '-')[:150]}")
-                    if rd.get("remaining_issues"):
-                        lines.append(f"- 遗留问题: {rd['remaining_issues'][:150]}")
 
-                    # Show ReAct steps for this round
-                    steps = rd.get("react_steps", [])
-                    if steps:
-                        lines.append("")
-                        lines.append("| 步骤 | 动作 | 结果 |")
-                        lines.append("|------|------|------|")
-                        for st in steps:
-                            lines.append(f"| {st.get('round', '-')} | `{st.get('action', '-')}` | {st.get('observation', '-')[:100]} |")
-
-                    # Show quick test result summary
+                    # Show ALL failure details
                     tr = rd.get("test_results", "")
                     if tr:
-                        # Show only FAIL results
-                        fail_lines = [l for l in tr.split("\n") if "FAIL" in l]
+                        fail_lines = [l for l in tr.split("\n") if "-> FAIL" in l]
+                        pass_lines = [l for l in tr.split("\n") if "-> PASS" in l]
                         if fail_lines:
                             lines.append("")
-                            lines.append("**失败用例**:")
-                            for fl in fail_lines[:5]:
-                                lines.append(f"- {fl.strip()[:120]}")
+                            lines.append(f"**失败用例 ({len(fail_lines)} 个)**:")
+                            for fl in fail_lines:
+                                lines.append(f"- {fl.strip()[:150]}")
+                        elif pr == 100:
+                            lines.append(f"**全部通过 ({len(pass_lines)} 个用例)**")
+
+                        # ── Per-file breakdown ──
+                        file_stats = _build_per_file_stats(tr)
+                        if file_stats:
+                            lines.append("")
+                            lines.append("**各文件通过情况**:")
+                            lines.append("")
+                            lines.append("| 文件 | 通过 | 失败 | 通过率 |")
+                            lines.append("|------|------|------|--------|")
+                            for fs in file_stats:
+                                f_pr = round(fs["passed"] / fs["total"] * 100) if fs["total"] > 0 else 0
+                                icon = "✅" if f_pr == 100 else "⚠️" if f_pr >= 80 else "❌"
+                                lines.append(f"| {icon} {fs['name']} | {fs['passed']} | {fs['failed']} | {f_pr}% |")
+                            lines.append(f"| **合计** | **{rd.get('passed', 0)}** | **{rd.get('failed', 0)}** | **{pr}%** |")
 
                     lines.append("")
 
@@ -163,10 +169,11 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
             if len(rounds) > 1:
                 lines.append("#### 优化效果对比")
                 lines.append("")
-                lines.append("| 轮次 | 通过 | 失败 | 通过率 |")
-                lines.append("|------|------|------|--------|")
+                lines.append("| 轮次 | 通过 | 失败 | 通过率 | 备注 |")
+                lines.append("|------|------|------|--------|------|")
                 for rd in rounds:
-                    lines.append(f"| {rd.get('round', '?')} | {rd.get('passed', 0)} | {rd.get('failed', 0)} | {rd.get('pass_rate', 0)}% |")
+                    note = "回退" if rd.get("rolled_back") else ""
+                    lines.append(f"| {rd.get('round', '?')} | {rd.get('passed', 0)} | {rd.get('failed', 0)} | {rd.get('pass_rate', 0)}% | {note} |")
                 lines.append("")
 
     # ── Code Artifacts ──
@@ -259,7 +266,7 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"[Pipeline] Log saved: {filepath}")
+    logger.info(f"[Pipeline] Log saved: {filepath}")
     return filepath
 
 
@@ -282,9 +289,9 @@ def _save_generated_files(project_name: str, language: str, src: dict, test: dic
                 with open(fp, "w", encoding="utf-8") as f:
                     f.write(content)
                 result["src"].append(fp.replace("\\", "/"))
-                print(f"[Pipeline] Saved source: {fp}")
+                logger.info(f"[Pipeline] Saved source: {fp}")
             except Exception as e:
-                print(f"[Pipeline] Failed to save {fp}: {e}")
+                logger.warning(f"[Pipeline] Failed to save {fp}: {e}")
 
     if test:
         test_dir = os.path.join(base, "test", safe_name, language)
@@ -295,9 +302,9 @@ def _save_generated_files(project_name: str, language: str, src: dict, test: dic
                 with open(fp, "w", encoding="utf-8") as f:
                     f.write(content)
                 result["test"].append(fp.replace("\\", "/"))
-                print(f"[Pipeline] Saved test: {fp}")
+                logger.info(f"[Pipeline] Saved test: {fp}")
             except Exception as e:
-                print(f"[Pipeline] Failed to save {fp}: {e}")
+                logger.warning(f"[Pipeline] Failed to save {fp}: {e}")
 
     return result
 
@@ -461,131 +468,159 @@ async def run_pipeline(
     }
     return  # Wait for confirm via WebSocket, then resume
 
-    # --- Stage 5: Test Gen ---
-    yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
-    try:
-        test_cases_data = (pipeline.stages[3].result or {}).get("test_cases", "") if pipeline.stages[3].result else ""
-        print(f"[Pipeline Stage 5] test_cases_data present: {bool(test_cases_data)}, length: {len(test_cases_data) if test_cases_data else 0}")
-        test_files = await generate_tests(current_code, language, test_cases_data)
-        print(f"[Pipeline] Stage 5: generated {len(test_files)} test files, current artifacts: {len(pipeline.code_artifacts)}")
-        for fname, content in test_files.items():
-            pipeline.code_artifacts.append(CodeArtifact(
-                language=language, filename=fname, content=content, version=2,
-            ))
-        print(f"[Pipeline] Stage 5: after append, artifacts: {len(pipeline.code_artifacts)}")
-        pipeline.stages[4].result = {"test_files": list(test_files.keys())}
-        _save_generated_files(diagram.name, language, {}, test_files)
-        pipeline.stages[4].logs = f"Saved: generated/test/{diagram.name}/{language}/"
-        yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
-    except Exception as e:
-        yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))
 
-    # --- Stage 6 + Stage 7: ReAct-based test exec + code optimize ---
-    async for event in _run_react_code_opt(pipeline, diagram, language, current_code, test_files):
-        yield event
-    return
-
-
-async def _run_react_code_opt(
+async def _run_test_and_optimize(
     pipeline: PipelineState,
     diagram: UmlDiagram,
     language: str,
     current_code: dict,
     test_files: dict,
 ) -> AsyncIterator[dict]:
-    """Run ReAct-based test execution + code optimization (Stages 6+7)."""
-    react = ReActEngine(max_rounds=5)
+    """Stage 6: fix compilation errors only. Stage 7: optimize source code using real test results."""
 
-    # --- Stage 6: Test Exec with ReAct ---
+    # ═══════════════════════════════════════════════════════════════
+    # Stage 6: Compile-Check — only fix import/syntax/NameError
+    # ═══════════════════════════════════════════════════════════════
     yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
-                               "ReAct: Analyzing & fixing tests...")
+                               "Running pytest to check compilation...")
 
-    # Step 6a: Refine tests via ReAct
-    for test_round in range(1, 3):
+    # Step 6a: Run pytest, fix only fatal errors (import/syntax/NameError)
+    fatal_still_remain = False
+    for fix_round in range(1, 3):
+        test_results_text = await _execute_tests(test_files, language, diagram.name)
+        fatal_errors = _extract_fatal_errors(test_results_text)
+
+        if not fatal_errors:
+            logger.info(f"[Stage6] Round {fix_round}: No fatal errors, compilation OK")
+            yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
+                                       f"Round {fix_round}: compilation OK ({_count_tests(test_results_text)} tests collected)")
+            fatal_still_remain = False
+            break
+
+        logger.info(f"[Stage6] Round {fix_round}: {len(fatal_errors)} fatal errors found, asking LLM to fix")
         yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
-                                   f"ReAct test-fix round {test_round}/2")
-        test_result = await react.run_test_generate_and_fix(
-            language=language,
-            source_code=current_code,
-            initial_tests=test_files,
-            task_description=f"Validate and fix {language} test code. Check imports, mock setup, assertions, edge cases. Round {test_round}.",
-        )
-        if test_result.success and test_result.final_code:
-            test_files = test_result.final_code
+                                   f"Round {fix_round}: fixing {len(fatal_errors)} compilation errors...")
+
+        # Simple LLM call to fix only compilation errors
+        fixed = await _fix_compile_errors(test_files, current_code, language, fatal_errors)
+        # Check if fix actually changed anything (P1-3: detect no-op fixes)
+        if _files_equal(test_files, fixed):
+            logger.warning(f"[Stage6] Round {fix_round}: LLM fix produced no changes, aborting compile fix loop")
+            fatal_still_remain = True
+            break
+        test_files = fixed
         pipeline.stages[5].result = {
-            "react_steps": [{"round": s.round, "thought": s.thought[:200], "action": s.action, "observation": s.observation[:200]} for s in test_result.steps],
+            "fatal_errors_found": len(fatal_errors),
+            "fix_round": fix_round,
         }
-        pipeline.stages[5].logs = f"ReAct test-fix complete: {len(test_result.steps)} reasoning steps"
-        yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
-                                   f"Test check round {test_round}: {test_result.summary[:100]}")
+        # Save fixed test files to disk
+        _save_generated_files(diagram.name, language, {}, test_files)
 
-    # Step 6b: Analyze test results via LLM (simulated execution)
-    test_results_text = await _execute_tests(test_files, language)
-    pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": test_results_text}
+    else:
+        fatal_still_remain = True
+        logger.warning(f"[Stage6] Compilation errors persist after 2 rounds")
+
+    # Step 6b: Final verification
+    test_results_text = await _execute_tests(test_files, language, diagram.name)
+    final_fatal = _extract_fatal_errors(test_results_text)
+    total_tests = _count_tests(test_results_text)
+
+    if fatal_still_remain and final_fatal:
+        # P1-3: Block if compilation errors remain unfixed
+        logger.error(f"[Stage6] {len(final_fatal)} fatal errors still present, aborting pipeline")
+        pipeline.stages[5].result = {
+            **(pipeline.stages[5].result or {}),
+            "test_results": test_results_text,
+            "unfixed_fatal_errors": final_fatal,
+        }
+        yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.FAILED,
+                                   f"Compilation failed: {len(final_fatal)} errors unfixed. Check test code manually.")
+        return
+
+    pipeline.stages[5].result = {
+        **(pipeline.stages[5].result or {}),
+        "test_results": test_results_text,
+    }
     yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.SUCCESS,
-                               f"Tests analyzed: {test_results_text[:120]}")
+                               f"Compilation OK, {total_tests} tests ready for Stage 7")
 
-    # --- Stage 7: Code Optimize with ReAct ---
+    # ═══════════════════════════════════════════════════════════════
+    # Stage 7: Code Optimize — use real test results to fix source
+    # ═══════════════════════════════════════════════════════════════
     rounds_history = []
+    prev_pass_rate = 0  # P1-4: track previous pass rate for rollback
     for round_num in range(1, 4):
         pipeline.optimization_round = round_num
         yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
-                                   f"ReAct code optimization round {round_num}/3")
+                                   f"Code optimization round {round_num}/3")
 
-        react_result = await react.run_source_opt_from_tests(
-            language=language,
-            source_code=current_code,
-            test_results=test_results_text,
-            task_description=f"Fix source code based on test failures. Round {round_num}/3.",
+        # P1-4: Save snapshot before optimization
+        prev_code = {**current_code}
+
+        # Ask LLM to fix source code based on real test failures
+        optimized_code = await _optimize_source_from_tests(
+            current_code, test_files, test_results_text, language, round_num
         )
-        if react_result.success and react_result.final_code:
-            current_code = react_result.final_code
+        if optimized_code and _validate_files_match(optimized_code, current_code, "Stage7 optimize"):
+            current_code = optimized_code
 
-        # Save optimized code
+        # Save optimized source code
         _save_generated_files(diagram.name, language, current_code)
 
-        # ── CRITICAL: Re-verify by running test analysis ──
-        new_test_results = await _execute_tests(test_files, language)
+        # Re-run real pytest to verify
+        new_test_results = await _execute_tests(test_files, language, diagram.name)
 
-        # Parse pass/fail for this round
+        # Parse results
         import re as _re
         passed = len(_re.findall(r'->\s*PASS', new_test_results, _re.IGNORECASE))
         failed = len(_re.findall(r'->\s*FAIL', new_test_results, _re.IGNORECASE))
         total = passed + failed
+        pass_rate = round(passed / total * 100) if total > 0 else 0
 
-        # Record this round's full results
+        # P1-4: Rollback on regression
+        rolled_back = False
+        if round_num > 1 and pass_rate < prev_pass_rate:
+            logger.warning(f"[Stage7] Round {round_num}: REGRESSION {prev_pass_rate}% → {pass_rate}%, rolling back")
+            current_code = prev_code
+            _save_generated_files(diagram.name, language, current_code)
+            rolled_back = True
+            # Re-run pytest on rolled-back code to get consistent results
+            new_test_results = await _execute_tests(test_files, language, diagram.name)
+            passed = len(_re.findall(r'->\s*PASS', new_test_results, _re.IGNORECASE))
+            failed = len(_re.findall(r'->\s*FAIL', new_test_results, _re.IGNORECASE))
+            total = passed + failed
+            pass_rate = round(passed / total * 100) if total > 0 else 0
+
+        logger.info(f"[Stage7] Round {round_num}: {passed}P/{failed}F/{total}T = {pass_rate}%{' (rolled back)' if rolled_back else ''}")
+
         round_record = {
             "round": round_num,
-            "react_steps": [{"round": s.round, "action": s.action, "observation": s.observation[:200]} for s in react_result.steps],
-            "react_summary": react_result.summary[:300],
-            "test_results": new_test_results[:2000],
+            "test_results": new_test_results,
             "passed": passed,
             "failed": failed,
             "total": total,
-            "pass_rate": round(passed / total * 100) if total > 0 else 0,
-            "remaining_issues": react_result.remaining_issues,
+            "pass_rate": pass_rate,
+            "rolled_back": rolled_back,
         }
         rounds_history.append(round_record)
 
-        # Update stage result with cumulative history
         pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": new_test_results}
         pipeline.stages[6].result = {"rounds": rounds_history}
 
         yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
-                                   f"Re-verify after round {round_num}...")
+                                   f"Round {round_num}: {passed}P/{failed}F = {pass_rate}%{' (rolled back)' if rolled_back else ''}")
 
-        # Check if tests ACTUALLY pass now
-        if "FAIL" not in new_test_results and "fail" not in new_test_results.lower():
+        # Early exit if all tests pass
+        if failed == 0:
             yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.SUCCESS,
-                                       f"All tests pass after round {round_num}")
+                                       f"All {total} tests pass after round {round_num}")
             break
-        else:
-            yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
-                                       f"Round {round_num} done, tests still failing, continuing...")
+
+        prev_pass_rate = pass_rate
+        test_results_text = new_test_results
 
     else:
-        # Final re-verify after max rounds
-        final_test_results = await _execute_tests(test_files, language)
+        final_test_results = await _execute_tests(test_files, language, diagram.name)
         pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": final_test_results}
         yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.SUCCESS,
                                    "Max optimization rounds reached")
@@ -604,12 +639,290 @@ async def _run_react_code_opt(
             ))
 
 
+def _files_equal(a: dict[str, str], b: dict[str, str]) -> bool:
+    """Check if two file dicts have identical content."""
+    if set(a.keys()) != set(b.keys()):
+        return False
+    return all(a[k] == b[k] for k in a)
+
+
+def _validate_files_match(new_files: dict, original: dict, tag: str) -> bool:
+    """P1-5: Validate that LLM-returned files match original filenames exactly.
+    Warns and returns False if files don't match."""
+    if not isinstance(new_files, dict):
+        logger.warning(f"[{tag}] LLM returned non-dict: {type(new_files)}")
+        return False
+    orig_set = set(original.keys())
+    new_set = set(new_files.keys())
+    missing = orig_set - new_set
+    extra = new_set - orig_set
+    if missing:
+        logger.warning(f"[{tag}] LLM output MISSING files: {missing}")
+    if extra:
+        logger.warning(f"[{tag}] LLM output has EXTRA files: {extra}")
+    if missing or extra:
+        return False
+    if len(new_files) != len(original):
+        logger.warning(f"[{tag}] File count mismatch: expected {len(original)}, got {len(new_files)}")
+        return False
+    return True
+
+
+def _extract_fatal_errors(test_results_text: str) -> list[str]:
+    """Extract only compilation-level errors (ImportError, SyntaxError, NameError,
+    ModuleNotFoundError, bad AttributeError from mock targets) from test results.
+    Does NOT include AssertionError — those are test logic failures, not compilation issues."""
+    import re
+    fatal_keywords = [
+        "ImportError", "ModuleNotFoundError", "SyntaxError", "NameError",
+        "cannot import", "No module named", "has no attribute", "Can't instantiate",
+    ]
+    errors = []
+    for line in test_results_text.split("\n"):
+        if "-> FAIL" in line:
+            for kw in fatal_keywords:
+                if kw in line:
+                    errors.append(line.strip())
+                    break
+    return errors
+
+
+def _count_tests(test_results_text: str) -> int:
+    """Count total tests from formatted output."""
+    import re
+    passed = len(re.findall(r'->\s*PASS', test_results_text))
+    failed = len(re.findall(r'->\s*FAIL', test_results_text))
+    return passed + failed
+
+
+async def _fix_compile_errors(
+    test_files: dict[str, str],
+    source_code: dict[str, str],
+    language: str,
+    fatal_errors: list[str],
+) -> dict[str, str]:
+    """Ask LLM to fix ONLY compilation errors in test files (not test logic)."""
+    test_code = "\n\n".join(
+        f"### {fname}\n```{language}\n{content}\n```"
+        for fname, content in test_files.items()
+    )
+    src_code = "\n\n".join(
+        f"### {fname}\n```{language}\n{content}\n```"
+        for fname, content in source_code.items()
+    )
+    errors_text = "\n".join(fatal_errors[:30])
+    MAX_SRC = 6000
+    MAX_TEST = 10000
+
+    trunc_note = ""
+    if len(src_code) > MAX_SRC:
+        trunc_note += f"⚠️ Source code truncated from {len(src_code)} to {MAX_SRC} chars. "
+    if len(test_code) > MAX_TEST:
+        trunc_note += f"⚠️ Test code truncated from {len(test_code)} to {MAX_TEST} chars. "
+    if trunc_note:
+        logger.warning(f"[Stage6] Truncation: {trunc_note}")
+
+    prompt = f"""Fix ONLY compilation-level errors in the test code below.
+DO NOT change any test logic, assertions, or expected values.
+Only fix: import errors, undefined names, bad mock targets, wrong attribute references.
+
+{trunc_note}
+## Source Code (for reference — DO NOT MODIFY):
+{src_code[:MAX_SRC]}
+
+## Test Code (fix compilation errors ONLY):
+{test_code[:MAX_TEST]}
+
+## Compilation Errors to fix:
+{errors_text}
+
+## Requirements:
+- Fix ONLY the errors listed above
+- Keep all test function names and test logic unchanged
+- Return the COMPLETE corrected test files as a JSON object mapping filenames to content
+- Only output the JSON object, no other text.
+
+```json
+{{"test_file1.py": "full corrected content...", "test_file2.py": "full corrected content..."}}
+```
+"""
+    logger.info(f"[Stage6] Asking LLM to fix {len(fatal_errors)} compilation errors")
+    response = await chat(
+        prompt=prompt,
+        system_prompt=f"You are an expert {language} developer. Fix ONLY compilation errors. Output only valid JSON.",
+        temperature=0.2,
+        max_tokens=8192,
+    )
+    try:
+        from app.services.tools import clean_llm_json_response
+        cleaned = clean_llm_json_response(response)
+        fixed = json.loads(cleaned)
+        if _validate_files_match(fixed, test_files, "Stage6 fix"):
+            logger.info(f"[Stage6] LLM fixed test files: {list(fixed.keys())}")
+            # Only accept files that exist in original, replace content
+            result = {**test_files}
+            for k in test_files:
+                if k in fixed:
+                    result[k] = fixed[k]
+            return result
+        else:
+            logger.warning(f"[Stage6] LLM returned invalid files, keeping originals")
+            return test_files
+    except Exception as e:
+        logger.warning(f"[Stage6] Failed to parse LLM fix response: {e}")
+        return test_files
+
+
+async def _optimize_source_from_tests(
+    source_code: dict[str, str],
+    test_files: dict[str, str],
+    test_results: str,
+    language: str,
+    round_num: int,
+) -> dict[str, str]:
+    """Ask LLM to optimize source code based on real pytest failures."""
+    src_text = "\n\n".join(
+        f"### {fname}\n```{language}\n{content}\n```"
+        for fname, content in source_code.items()
+    )
+    failures = [l for l in test_results.split("\n") if "-> FAIL" in l]
+    MAX_SRC = 8000
+
+    trunc_note = ""
+    if len(src_text) > MAX_SRC:
+        trunc_note += f"⚠️ Source code truncated from {len(src_text)} to {MAX_SRC} chars. "
+    if trunc_note:
+        logger.warning(f"[Stage7] Truncation: {trunc_note}")
+
+    prompt = f"""Fix the source code to make the failing tests pass.
+
+{trunc_note}
+## Source Code (modify this):
+{src_text[:MAX_SRC]}
+
+## Test Failures ({len(failures)} failing):
+{chr(10).join(failures[:40])}
+
+## Requirements:
+- Analyze each failure and fix the SOURCE CODE (not the test code)
+- Keep the public API compatible with existing tests
+- Return the COMPLETE corrected source files as a JSON object mapping filenames to content
+- Only output the JSON object, no other text.
+
+```json
+{{"file1.py": "full corrected content...", "file2.py": "full corrected content..."}}
+```
+"""
+    logger.info(f"[Stage7] Round {round_num}: asking LLM to fix {len(failures)} test failures")
+    response = await chat(
+        prompt=prompt,
+        system_prompt=f"You are an expert {language} developer. Fix source code to make tests pass. Output only valid JSON.",
+        temperature=0.3,
+        max_tokens=8192,
+    )
+    try:
+        from app.services.tools import clean_llm_json_response
+        cleaned = clean_llm_json_response(response)
+        fixed = json.loads(cleaned)
+        if _validate_files_match(fixed, source_code, "Stage7 optimize"):
+            logger.info(f"[Stage7] LLM returned optimized source files: {list(fixed.keys())}")
+            # Only accept files that exist in original, replace content
+            result = {**source_code}
+            for k in source_code:
+                if k in fixed:
+                    result[k] = fixed[k]
+            return result
+        else:
+            logger.warning(f"[Stage7] LLM returned invalid files, keeping originals")
+            return source_code
+    except Exception as e:
+        logger.warning(f"[Stage7] Failed to parse LLM optimization: {e}")
+        return source_code
+
+
+def _load_source_from_disk(project_name: str, language: str) -> dict[str, str]:
+    """Load source files from generated/src/{project}/{language}/ directory."""
+    from pathlib import Path
+    settings = get_settings()
+    base = Path(settings.uml_dir).resolve().parent.parent / "generated" / "src"
+    # Sanitize project name
+    safe_name = "".join(c for c in project_name if c.isalnum() or c in "._- ").strip() or "project"
+    src_dir = base / safe_name / language
+    if not src_dir.exists():
+        return {}
+    result = {}
+    for fp in src_dir.iterdir():
+        if fp.is_file() and fp.suffix in (".py", ".ts", ".js", ".java", ".go", ".rs", ".rb", ".swift", ".kt", ".php", ".cs", ".cpp", ".h", ".hpp"):
+            result[fp.name] = fp.read_text(encoding="utf-8")
+    return result
+
+
+def _build_per_file_stats(test_results: str) -> list[dict]:
+    """Parse test results to build per-file (per-module) pass/fail stats.
+    Maps test case ID prefixes (TC_BASE, TC_OTA, etc.) to module names."""
+    import re
+
+    # Maps test case ID prefix → display name (ordered by typical UML modules)
+    PREFIX_MAP: dict[str, str] = {}
+    file_order = []
+
+    stats: dict[str, dict] = {}
+    for line in test_results.split("\n"):
+        # Match "Test: test_TC_XXXX_NNN_..." lines
+        m = re.match(r'Test:\s*test_(\w+?)_\d+', line)
+        if not m:
+            # Also try "Test: TestClass::test_TC_XXXX_NNN_..." format (with ::)
+            m = re.match(r'Test:\s*\w+::test_(\w+?)_\d+', line)
+        if not m:
+            continue
+        prefix = m.group(1)  # e.g., "TC_BASE", "TC_OTA"
+
+        # Derive module name from prefix: TC_BASE → BaseTask, etc.
+        if prefix not in PREFIX_MAP:
+            KNOWN = {
+                "TC_BASE": "BaseTask",
+                "TC_OTA": "OtaTask",
+                "TC_CROW": "CrowTask",
+                "TC_SEN": "SentinelTask",
+                "TC_SCH": "TaskScheduler",
+                "TC_MM": "MMApp",
+            }
+            if prefix in KNOWN:
+                PREFIX_MAP[prefix] = KNOWN[prefix]
+            else:
+                # Fallback: auto-derive, capitalize each part after TC_
+                parts = prefix.split("_")
+                raw = "".join(p.capitalize() for p in parts[1:]) if parts[0] == "TC" else prefix
+                PREFIX_MAP[prefix] = raw
+            file_order.append(prefix)
+
+        name = PREFIX_MAP[prefix]
+        if name not in stats:
+            stats[name] = {"name": name, "passed": 0, "failed": 0, "total": 0}
+        if "-> PASS" in line:
+            stats[name]["passed"] += 1
+        elif "-> FAIL" in line:
+            stats[name]["failed"] += 1
+        stats[name]["total"] += 1
+
+    # Return in file_order to maintain consistent display
+    result = []
+    for prefix in file_order:
+        name = PREFIX_MAP.get(prefix)
+        if name and name in stats:
+            result.append(stats[name])
+    # Add any unmapped
+    for name, s in stats.items():
+        if s not in result:
+            result.append(s)
+    return result
+
+
 async def _update_stage(
     pipeline: PipelineState,
     stage_name: StageName,
     status: StageStatus,
     logs: str = "",
-    stopped: bool = False,
 ) -> dict:
     """Update a pipeline stage and return a progress event."""
     pipeline.current_stage = stage_name
@@ -628,10 +941,106 @@ async def _update_stage(
     }
 
 
-async def _execute_tests(test_files: dict[str, str], language: str) -> str:
-    """Simulate test execution (in production: Docker sandbox)."""
-    # In a real implementation, this would spin up a Docker container and run tests.
-    # For now we ask the LLM to simulate test results.
+async def _execute_tests(test_files: dict[str, str], language: str, project_name: str = "Untitled") -> str:
+    """Execute tests using real pytest subprocess. Falls back to LLM simulation if pytest unavailable."""
+    import subprocess
+    import sys
+    import asyncio as _asyncio
+    from pathlib import Path
+
+    settings = get_settings()
+    base_dir = Path(settings.uml_dir).resolve().parent.parent
+    src_dir = base_dir / "generated" / "src" / project_name / language
+    test_dir = base_dir / "generated" / "test" / project_name / language
+
+    logger.info(f"[TestExec] ========== Running real pytest ==========")
+    logger.info(f"[TestExec] Project: {project_name} | Language: {language}")
+    logger.info(f"[TestExec] Source dir: {src_dir}")
+    logger.info(f"[TestExec] Test dir:   {test_dir}")
+    logger.info(f"[TestExec] Files on disk: test_dir exists={test_dir.exists()}, src_dir exists={src_dir.exists()}")
+
+    # List actual files on disk for debugging
+    if test_dir.exists():
+        disk_files = list(test_dir.iterdir())
+        logger.info(f"[TestExec] Test files on disk: {[f.name for f in disk_files if f.is_file()]}")
+    if src_dir.exists():
+        disk_src = list(src_dir.iterdir())
+        logger.info(f"[TestExec] Source files on disk: {[f.name for f in disk_src if f.is_file()]}")
+
+    if not test_dir.exists() or not any(test_dir.iterdir()):
+        logger.warning(f"[TestExec] Test directory empty or missing, using LLM simulation fallback")
+        test_code = "\n\n".join(f"### {n}\n```\n{c}\n```" for n, c in test_files.items())
+        return await chat(
+            f"Predict test results:\n\n{test_code}\n\nOutput: Test: name -> PASS/FAIL",
+            system_prompt="You are a test execution simulator.", temperature=0.3
+        )
+
+    # Build environment with PYTHONPATH including both src and test dirs
+    env = os.environ.copy()
+    pythonpath_parts = [str(src_dir), str(test_dir)]
+    if "PYTHONPATH" in env:
+        pythonpath_parts.insert(0, env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+
+    # Build pytest command: verbose, short traceback, timeout per test
+    cmd = [
+        sys.executable, "-m", "pytest",
+        str(test_dir),
+        "-v",                    # verbose: shows each test name
+        "--tb=short",            # short traceback for failures
+        "--timeout=30",          # 30s timeout per test
+        "--color=no",            # no ANSI colors
+    ]
+
+    logger.info(f"[TestExec] Command: {' '.join(cmd)}")
+    logger.info(f"[TestExec] PYTHONPATH: {env['PYTHONPATH']}")
+
+    try:
+        proc = await _asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+            env=env,
+            cwd=str(base_dir),
+        )
+        stdout_bytes, stderr_bytes = await _asyncio.wait_for(
+            proc.communicate(), timeout=120
+        )
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+
+        logger.info(f"[TestExec] pytest exit code: {proc.returncode}")
+        logger.info(f"[TestExec] pytest stdout ({len(stdout)} chars)")
+
+        # Debug: show first 3 test lines to verify parse format
+        test_lines_raw = [l.strip() for l in stdout.split("\n") if "::" in l and ("PASSED" in l or "FAILED" in l)]
+        if test_lines_raw:
+            logger.info(f"[TestExec] Raw test lines ({len(test_lines_raw)} total), first 2: {test_lines_raw[:2]}")
+
+        if stderr.strip():
+            logger.info(f"[TestExec] pytest stderr ({len(stderr)} chars):\n{stderr[:800]}")
+
+        # Parse pytest verbose output into the expected format
+        formatted = _parse_pytest_output(stdout, stderr)
+        # Debug: show first 2 formatted lines
+        formatted_lines = [l for l in formatted.split("\n") if "->" in l]
+        if formatted_lines:
+            logger.info(f"[TestExec] Formatted ({len(formatted_lines)} tests), first 2: {formatted_lines[:2]}")
+            logger.info(f"[TestExec] Parsed summary: {formatted.split(chr(10))[-1]}")
+        logger.info(f"[TestExec] ========== pytest done ==========")
+
+        return formatted
+
+    except _asyncio.TimeoutError:
+        logger.error("[TestExec] pytest timed out after 120s, falling back to LLM simulation")
+    except FileNotFoundError:
+        logger.error("[TestExec] pytest executable not found, falling back to LLM simulation")
+    except Exception as e:
+        logger.exception(f"[TestExec] pytest execution failed: {e}, falling back to LLM simulation")
+
+    # ── LLM simulation fallback ──
+    logger.info("[TestExec] Running LLM simulation fallback...")
     test_code = "\n\n".join(
         f"### {fname}\n```\n{content}\n```"
         for fname, content in test_files.items()
@@ -653,6 +1062,104 @@ Summary: X passed, Y failed
     return await chat(prompt, system_prompt="You are a test execution simulator.", temperature=0.3)
 
 
+def _parse_pytest_output(stdout: str, stderr: str) -> str:
+    """Parse pytest -v output into the expected format:
+    Test: <name> -> PASS
+    Test: <name> -> FAIL (<reason>)
+    ...
+    Summary: X passed, Y failed
+    """
+    import re
+    lines_out: list[str] = []
+    passed = 0
+    failed = 0
+
+    # Parse per-test lines: "test_file.py::test_name PASSED [%]" or "FAILED [%]"
+    test_pattern = re.compile(r'^(.+?)::(.+?)\s+(PASSED|FAILED|ERROR|SKIPPED)')
+    match_count = 0
+    for line in stdout.split("\n"):
+        stripped = line.strip()
+        m = test_pattern.match(stripped)
+        if m:
+            match_count += 1
+            test_name = m.group(2)
+            status = m.group(3)
+            if status == "PASSED":
+                lines_out.append(f"Test: {test_name} -> PASS")
+                passed += 1
+            elif status == "FAILED":
+                # Try to find the error reason from stderr or subsequent lines
+                reason = _extract_failure_reason(test_name, stdout, stderr)
+                lines_out.append(f"Test: {test_name} -> FAIL ({reason})")
+                failed += 1
+            else:
+                lines_out.append(f"Test: {test_name} -> {status}")
+
+    if not lines_out:
+        # Fallback: try to find any test results in the output
+        passed_match = re.search(r'(\d+)\s+passed', stdout)
+        failed_match = re.search(r'(\d+)\s+failed', stdout)
+        if passed_match:
+            passed = int(passed_match.group(1))
+        if failed_match:
+            failed = int(failed_match.group(1))
+        if passed or failed:
+            # Build synthetic lines from summary only
+            for _ in range(passed):
+                lines_out.append("Test: unknown -> PASS")
+            for _ in range(failed):
+                lines_out.append("Test: unknown -> FAIL (see pytest output for details)")
+        else:
+            lines_out.append(stdout[:2000])
+            lines_out.append(stderr[:1000])
+
+    lines_out.append(f"Summary: {passed} passed, {failed} failed")
+    return "\n".join(lines_out)
+
+
+def _extract_failure_reason(test_name: str, stdout: str, stderr: str) -> str:
+    """Extract a brief failure reason from pytest --tb=short output."""
+    import re
+    combined = stdout + "\n" + stderr
+
+    # Normalize test_name to match pytest's format (replace :: with .)
+    pytest_test_name = test_name.replace("::", ".")
+
+    # Strategy 1: Find the FAILURES section block for this test
+    # Format: "________ TestClass.test_name ________"
+    # The block content until the next "________" or "========" separator
+    escaped = re.escape(pytest_test_name)
+    fail_header = re.search(
+        r'_{5,}\s*' + escaped + r'\s*_{5,}\s*\r?\n(.*?)(?:\r?\n\s*_{5,}|\r?\n\s*={5,}|\Z)',
+        combined, re.DOTALL
+    )
+    if fail_header:
+        block = fail_header.group(1)
+        # Extract "E   ErrorType: message" line
+        err_match = re.search(r'\nE\s+(\w+(?:Error|Exception|Warning|AssertionError)):?\s*(.+?)(?:\r?\n|$)', block)
+        if err_match:
+            err_type = err_match.group(1)
+            err_msg = err_match.group(2).strip()[:100]
+            return f"{err_type}: {err_msg}"
+
+        # Fallback: find any assertion or error line
+        for pattern in [r'(AssertionError:?\s*.+)', r'(assert\s+.+)']:
+            m = re.search(pattern, block)
+            if m:
+                return m.group(1).strip()[:100]
+
+    # Strategy 2: Search combined output for error line near test name
+    escaped_short = re.escape(pytest_test_name.split(".")[-1])  # Just the function name
+    near_test = re.search(
+        escaped_short + r'.*?\n(E\s+.+?)(?:\r?\n|$)',
+        combined, re.MULTILINE
+    )
+    if near_test:
+        return near_test.group(1).strip()[:100]
+
+    return "Test assertion failed"
+
+
 async def resume_pipeline(
     pipeline_id: str,
     diagram: UmlDiagram,
@@ -669,11 +1176,20 @@ async def resume_pipeline(
     current_code: dict[str, str] = {}
     test_files: dict[str, str] = {}
 
+    need_code_gen = not skip_code_gen
     if skip_code_gen:
-        # Reuse existing source code from artifacts
+        # Reuse existing source code from artifacts, fallback to disk
         current_code = {a.filename: a.content for a in pipeline.code_artifacts if a.version == 1}
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS, "Using cached code")
-    else:
+        if not current_code:
+            current_code = _load_source_from_disk(diagram.name, language)
+        if current_code:
+            logger.info(f"[Pipeline] Loaded {len(current_code)} cached source files: {list(current_code.keys())}")
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS, "Using cached code")
+        else:
+            logger.warning("[Pipeline] No cached source code found, regenerating...")
+            need_code_gen = True
+
+    if need_code_gen:
         # Use optimized diagram if available from stage 1
         opt_result = pipeline.stages[0].result or {}
         optimized_data = opt_result.get("optimized")
@@ -713,7 +1229,7 @@ async def resume_pipeline(
     yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
     try:
         test_cases_data = (pipeline.stages[3].result or {}).get("test_cases", "") if pipeline.stages[3].result else ""
-        print(f"[Pipeline Stage 5] test_cases_data present: {bool(test_cases_data)}, length: {len(test_cases_data) if test_cases_data else 0}")
+        logger.info(f"[Pipeline Stage 5] test_cases_data present: {bool(test_cases_data)}, length: {len(test_cases_data) if test_cases_data else 0}")
         test_files = await generate_tests(current_code, language, test_cases_data)
         for fname, content in test_files.items():
             pipeline.code_artifacts.append(CodeArtifact(
@@ -727,7 +1243,7 @@ async def resume_pipeline(
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))
         return
 
-    # --- Stage 6 + Stage 7: ReAct-based test exec + code optimize ---
-    async for event in _run_react_code_opt(pipeline, diagram, language, current_code, test_files):
+    # --- Stage 6 + Stage 7: Test exec + code optimize ---
+    async for event in _run_test_and_optimize(pipeline, diagram, language, current_code, test_files):
         yield event
     return

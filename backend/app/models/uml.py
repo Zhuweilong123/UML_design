@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from typing import Optional
 from enum import Enum
 
 

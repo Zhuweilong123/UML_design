@@ -6,9 +6,20 @@ Each tool is a function the LLM can call during the reasoning loop.
 import json
 import ast
 import asyncio
-import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+
+def clean_llm_json_response(response: str) -> str:
+    """Strip markdown code fences from LLM JSON responses."""
+    cleaned = response.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        lines = lines[1:] if lines[0].startswith("```") else lines
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines)
+    return cleaned
 
 
 @dataclass

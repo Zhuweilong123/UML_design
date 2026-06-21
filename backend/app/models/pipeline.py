@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from typing import Optional
 from enum import Enum
 
 
@@ -58,11 +58,6 @@ class PipelineState(BaseModel):
     code_artifacts: list[CodeArtifact] = Field(default_factory=list)
     optimization_round: int = 0  # max 3 rounds for code_optimize
     review_log: list[dict] = Field(default_factory=list)
-
-
-class PipelineCreateRequest(BaseModel):
-    diagram_id: str
-    auto_confirm: bool = False
 
 
 class ConfirmRequest(BaseModel):

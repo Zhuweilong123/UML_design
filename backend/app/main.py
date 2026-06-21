@@ -1,12 +1,23 @@
 """FastAPI application entry point."""
 
 import os
+import sys
+import logging
 os.environ.setdefault("PYTHONUTF8", "1")
+sys.dont_write_bytecode = True  # Never generate __pycache__
+
+# ── Logging config ──────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+# Suppress noisy library loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-import os
 
 from app.core.config import get_settings
 from app.api.files import router as files_router
@@ -56,4 +67,10 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=settings.debug)
+    # Override uvicorn's log format to include timestamps
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["formatters"]["default"]["fmt"] = "%(asctime)s | %(levelname)-7s | %(message)s"
+    log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    log_config["formatters"]["access"]["fmt"] = '%(asctime)s | %(client_addr)s - "%(request_line)s" %(status_code)s'
+    log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=settings.debug, log_config=log_config)

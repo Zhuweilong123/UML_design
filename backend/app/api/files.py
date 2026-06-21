@@ -3,7 +3,7 @@
 import os
 from datetime import datetime
 from pydantic import BaseModel
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import PlainTextResponse
 
 from app.models.uml import UmlDiagram, ExportRequest
@@ -64,11 +64,9 @@ async def upload_excel(file: UploadFile = File(...)):
     content = await file.read()
 
     # Save uploaded file
-    from app.core.config import get_settings
     settings = get_settings()
-    import os as _os
-    _os.makedirs(settings.upload_dir, exist_ok=True)
-    filepath = _os.path.join(settings.upload_dir, file.filename or "testCase.xlsx")
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    filepath = os.path.join(settings.upload_dir, file.filename or "testCase.xlsx")
     with open(filepath, "wb") as f:
         f.write(content)
 

@@ -2,11 +2,12 @@
 
 import asyncio
 import json
+import logging
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.models.uml import UmlDiagram
 from app.models.pipeline import (
-    PipelineCreateRequest, ConfirmRequest, PipelineState,
+    ConfirmRequest, PipelineState,
 )
 from pydantic import BaseModel
 
@@ -16,6 +17,8 @@ from app.services.pipeline_service import (
     stop_pipeline, _is_stopped, _update_stage, _save_pipeline_log,
 )
 from app.models.pipeline import StageName, StageStatus
+
+logger = logging.getLogger(__name__)
 
 
 class CreatePipelineBody(BaseModel):
@@ -199,10 +202,9 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                                 s.status = StageStatus.SUCCESS
                         # Store test case data from frontend for Stage 5
                         tc = msg.get("test_cases", "")
-                        print(f"[Pipeline] confirm_case_review received: test_cases length={len(tc)}, preview={tc[:200] if tc else '(EMPTY)'}", flush=True)
+                        logger.info(f"[Pipeline] confirm_case_review received: test_cases length={len(tc)}, preview={tc[:200] if tc else '(EMPTY)'}")
                         pipeline.stages[3].result = {"test_cases": tc}
-                        print(f"[Pipeline] Stored test_cases in stages[3].result: {len(tc)} chars", flush=True)
-                        print(f"[Pipeline] Stored test_cases: {len(tc)} chars", flush=True)
+                        logger.info(f"[Pipeline] Stored test_cases in stages[3].result: {len(tc)} chars")
                         await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
                     # Resume from Stage 5 (Test Gen), skip case review
                     async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
@@ -255,7 +257,7 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
             try:
                 _save_pipeline_log(pipeline, diagram, language)
             except Exception as log_e:
-                print(f"[Pipeline] Failed to save log: {log_e}")
+                logger.warning(f"[Pipeline] Failed to save log: {log_e}")
 
         # Pipeline completed successfully
         await ws.send_json({"event": "pipeline_complete", "pipeline_id": pipeline_id, "message": "流水线执行完成"})

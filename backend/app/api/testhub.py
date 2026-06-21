@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.services.llm_service import chat
+from app.services.tools import clean_llm_json_response
 
 try:
     import openpyxl
@@ -175,7 +176,7 @@ async def generate_test_code(req: TestGenRequest):
                 f"[{case_id}] {case_name} (Priority: {priority})\n  Steps: {steps}\n  Expected: {expected}"
             )
 
-    cases_text = "\n\n".join(case_summaries[:20])  # Limit to prevent token overflow
+    cases_text = "\n\n".join(case_summaries)  # All cases
 
     if req.mode == "incremental" and req.changed_cases:
         changed_text = json.dumps(req.changed_cases, ensure_ascii=False, indent=2)
@@ -185,7 +186,7 @@ async def generate_test_code(req: TestGenRequest):
 {changed_text}
 
 ## All Cases (for context):
-{cases_text[:2000]}
+{cases_text[:6000]}
 
 Output as JSON mapping test filenames to content. Only the changed test files.
 """
@@ -193,7 +194,7 @@ Output as JSON mapping test filenames to content. Only the changed test files.
         prompt = f"""Generate comprehensive {req.language} unit test code from the following test cases:
 
 ## Test Cases:
-{cases_text[:4000]}
+{cases_text[:8000]}
 
 ## Requirements:
 - Use the standard test framework for {req.language}
@@ -210,13 +211,7 @@ Output as JSON mapping test filenames to content. Only the changed test files.
     )
 
     try:
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
+        cleaned = clean_llm_json_response(response)
         result = json.loads(cleaned)
         return {"files": result, "language": req.language, "mode": req.mode}
     except json.JSONDecodeError:

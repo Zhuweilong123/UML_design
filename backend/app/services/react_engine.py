@@ -6,12 +6,14 @@ Uses text-based tool calling (compatible with all LLMs including DeepSeek).
 import json
 import re
 import os
+import logging
 from datetime import datetime
 from dataclasses import dataclass, field
 
 from app.core.config import get_settings
 from app.services.tools import create_tools, Tool
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -53,7 +55,7 @@ def _save_context(messages: list, task_type: str = "") -> str:
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"[Context] Saved: {filepath}")
+    logger.info(f"[Context] Saved: {filepath}")
     return filepath
 
 
@@ -216,7 +218,7 @@ Fix source code based on failures. Call finish_optimization when done."""
                     break
                 except Exception as e:
                     if attempt < 2:
-                        print(f"[ReAct] Retry {attempt+1}/2: {e}")
+                        logger.warning(f"[ReAct] Retry {attempt+1}/2: {e}")
                         import asyncio
                         await asyncio.sleep(2)
                     else:

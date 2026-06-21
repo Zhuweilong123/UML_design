@@ -1,8 +1,9 @@
 """Code generation service – generates code in 12 languages from UML diagrams."""
 
 import json
-from app.models.uml import UmlDiagram, Stereotype, Visibility, RelationType
+from app.models.uml import UmlDiagram
 from app.services.llm_service import chat
+from app.services.tools import clean_llm_json_response
 
 SUPPORTED_LANGUAGES = [
     "python", "java", "typescript", "javascript", "csharp", "cpp",
@@ -46,8 +47,12 @@ def _build_class_prompt(diagram: UmlDiagram, language: str) -> str:
             static = "static " if m.is_static else ""
             abstract = "abstract " if m.is_abstract else ""
             methods.append(f"    {m.visibility} {abstract}{static}{m.name}({m.params}): {m.return_type}")
+        # Include class notes (business logic requirements)
+        note_block = ""
+        if c.note.strip():
+            note_block = f"\n  Business Rules: {c.note}"
         classes_desc.append(
-            f"Class: {c.name} (stereotype={c.stereotype})\n"
+            f"Class: {c.name} (stereotype={c.stereotype}){note_block}\n"
             + "Attributes:\n" + "\n".join(attrs or ["    (none)"]) + "\n"
             + "Methods:\n" + "\n".join(methods or ["    (none)"])
         )
@@ -56,7 +61,16 @@ def _build_class_prompt(diagram: UmlDiagram, language: str) -> str:
     for r in diagram.relations:
         src_name = next((c.name for c in diagram.classes if c.id == r.source), r.source)
         tgt_name = next((c.name for c in diagram.classes if c.id == r.target), r.target)
-        relations_desc.append(f"  {src_name} --({r.type})--> {tgt_name}")
+        # Include relation metadata
+        extras = []
+        if r.role_name:
+            extras.append(f"role={r.role_name}")
+        if r.multiplicity_source or r.multiplicity_target:
+            extras.append(f"mult={r.multiplicity_source}..{r.multiplicity_target}")
+        if r.note.strip():
+            extras.append(f"note={r.note}")
+        extra_str = f" ({', '.join(extras)})" if extras else ""
+        relations_desc.append(f"  {src_name} --({r.type})--> {tgt_name}{extra_str}")
 
     prompt = f"""Generate complete, compilable {language} code from the following UML class diagram.
 
@@ -67,6 +81,8 @@ def _build_class_prompt(diagram: UmlDiagram, language: str) -> str:
 {chr(10).join(relations_desc) if relations_desc else "  (none)"}
 
 ## Requirements:
+- CRITICAL: Implement ALL business rules described in each class's "Business Rules" section.
+  These are the core logic requirements — do NOT skip them.
 - Generate a separate file for each class where appropriate.
 - Follow {language} best practices and conventions.
 - Implement all specified attributes, methods, and relations.
@@ -89,8 +105,28 @@ def _build_test_prompt(code_files: dict[str, str], language: str, test_cases: st
         for fname, content in code_files.items()
     )
 
+    # ── Extract actual API signatures from source code ──
+    api_sigs = _extract_api_signatures(code_files, language)
+
+    # ── Truncation detection ──
+    MAX_TEST_CASES = 10000
+    MAX_CODE_LEN = 8000
+    tc_truncated = len(test_cases) > MAX_TEST_CASES if test_cases else False
+    code_truncated = len(code_block) > MAX_CODE_LEN
+
     if test_cases and test_cases.strip():
-        # When test cases are provided, make them the PRIMARY driver (not the source code)
+        test_cases_section = test_cases[:MAX_TEST_CASES]
+        code_section = code_block[:MAX_CODE_LEN]
+
+        trunc_warning = ""
+        if tc_truncated or code_truncated:
+            trunc_warning = "⚠️ WARNING: Some data was truncated due to length limits. "
+            if tc_truncated:
+                trunc_warning += f"Test cases truncated from {len(test_cases)} to {MAX_TEST_CASES} chars. "
+            if code_truncated:
+                trunc_warning += f"Source code truncated from {len(code_block)} to {MAX_CODE_LEN} chars. "
+            trunc_warning += "Use the API signatures below as the authoritative reference.\n\n"
+
         prompt = f"""You MUST generate unit tests for {language}. Follow these rules EXACTLY.
 
 ## YOUR PRIMARY TASK: ONE test function per case ID below
@@ -103,17 +139,22 @@ Example mapping:
   TC-CROW-002 "crow time window 2:00-4:00" → `def test_TC_CROW_002_crow_time_window():`
   TC-BASE-001 "subclass instantiation" → `def test_TC_BASE_001_subclass_instantiation():`
 
-## TEST CASES (MUST cover ALL of these):
-{test_cases[:4000]}
+## ACTUAL SOURCE API (tests MUST match these exact signatures):
+{api_sigs}
 
-## Reference Source Code (understand the classes being tested):
-{code_block[:3000]}
+{trunc_warning}## TEST CASES (MUST cover ALL of these):
+{test_cases_section}
+
+## Complete Source Code (for understanding business logic):
+{code_section}
 
 ## OUTPUT REQUIREMENTS:
 1. Return ONLY a JSON object mapping filenames to file content.
 2. Each test function's docstring MUST include: Case ID, test steps, and expected result.
 3. Use the standard testing framework for {language}.
-4. Group test functions logically — one file per source module when possible.
+4. Group test functions logically — one test file per source module.
+5. CRITICAL: Import paths and class/method signatures MUST match the ACTUAL SOURCE API above exactly.
+   DO NOT invent parameter names — use the exact signatures shown.
 
 Output format:
 ```json
@@ -121,10 +162,11 @@ Output format:
 ```
 """
     else:
+        code_section = code_block[:MAX_CODE_LEN]
         prompt = f"""Generate comprehensive unit tests for the following {language} code.
 
 ## Source Code:
-{code_block}
+{code_section}
 
 ## Requirements:
 - Write tests using the standard testing framework for {language}.
@@ -138,6 +180,27 @@ Only output the JSON object, no other text.
 """
 
     return prompt
+
+
+def _extract_api_signatures(code_files: dict[str, str], language: str) -> str:
+    """Extract importable class/func signatures from source code so LLM can match exact API."""
+    import re
+    lines_out = []
+    for fname, content in code_files.items():
+        lines_out.append(f"### {fname}")
+        module_name = fname.rsplit(".", 1)[0] if "." in fname else fname
+        lines_out.append(f"# Import: from {module_name} import ...")
+        # Extract class definitions with constructor params
+        for line in content.split("\n"):
+            stripped = line.strip()
+            # Class definition
+            if stripped.startswith("class "):
+                lines_out.append(stripped)
+            # Method/function definition (top-level or class method)
+            elif stripped.startswith("def ") and not stripped.startswith("def test_"):
+                lines_out.append(f"  {stripped}")
+        lines_out.append("")
+    return "\n".join(lines_out)
 
 
 async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
@@ -157,13 +220,7 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
     # Parse JSON from response
     try:
         # Strip markdown code fences if present
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
+        cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
         return {"main." + _get_extension(language): response}
@@ -181,13 +238,7 @@ async def generate_tests(
         max_tokens=8192,
     )
     try:
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
+        cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
         return {"test_main." + _get_extension(language): response}
@@ -283,6 +334,8 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 3. stereotype values MUST be "class", "interface", "abstract", or "enum".
 4. relation type values MUST be "inheritance", "composition", "aggregation", "association", "realization", or "dependency".
 5. Every class and relation MUST have a unique "id" field.
+6. PRESERVE all "note" fields on classes and relations — these contain business requirements.
+7. PRESERVE "role_name", "multiplicity_source", "multiplicity_target" on relations.
 
 ## Output Format:
 ```json
@@ -301,13 +354,7 @@ Only output the JSON object, no other text.
         max_tokens=8192,
     )
     try:
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
+        cleaned = clean_llm_json_response(response)
         result = json.loads(cleaned)
         # Normalize all enum values from LLM output
         if "optimized" in result and isinstance(result["optimized"], dict):
@@ -351,13 +398,7 @@ async def fix_code(
         max_tokens=8192,
     )
     try:
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
+        cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
         return {f"fixed_{k}": v for k, v in code_files.items()}
