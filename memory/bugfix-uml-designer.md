@@ -42,6 +42,10 @@ metadata:
 | 27 | ReAct API 400 错误 | DeepSeek 不支持 OpenAI function calling 的 tool_calls 格式 | 后端/ReAct |
 | 28 | 优化仅1轮就停止 | LLM 自称完成但实际未修复，缺少验证机制 | 后端/流水线 |
 | 29 | 日志只记录最后一轮 | 优化结果被覆盖，历史未保存 | 后端/流水线 |
+| 30 | 文件无法打开（全部 API 失败） | Vite 代理端口 8001，后端监听 8000 — 端口不匹配 | 环境/前端 |
+| 31 | 生成的测试用例不包含用例ID | ① Sheet "用例概览" 污染 ② 列索引硬编码 ③ LLM 提示词源码优先于用例 | LLM/后端 |
+| 32 | 后端代码修改后不生效 | 多个僵尸 Python 进程占 8000 端口，StatReload 重载不到新代码 | 环境 |
+| 33 | Python 3.14 PYTHONUTF8 崩溃 | `set PYTHONUTF8=1` 触发 fatal error，改用 `-X utf8` | 环境/Python |
 
 ---
 
@@ -690,3 +694,54 @@ by tool messages responding to each tool_call_id"
 - 端口和连线功能参考问题6 + 问题11的双向同步
 - LLM 集成时必须参考问题8做输出归一化
 - FastAPI 端点设计参考问题13的组合请求体模式
+- Vite 代理端口必须与后端一致，配置修改后需重启 dev server
+- Excel 列映射按关键词而非硬编码索引，需过滤非用例Sheet
+- LLM 提示词中用例需求必须置顶，加入映射示例
+- Windows 端口占用用 netstat -ano 排查，僵尸进程 taskkill /F /IM python.exe
+- Python 3.14 用 -X utf8 替代 PYTHONUTF8=1
+
+---
+
+## 问题30: 文件无法打开 — Vite 代理端口不匹配
+
+**现象**: 点击"打开"按钮后文件列表为空，"加载文件列表失败"；所有 API 请求失败。
+
+**根因**: `vite.config.ts` 代理 `/api` 到 `http://localhost:8001`，但后端在端口 `8000`。前端所有请求被代理到无进程端口。
+
+**解决**: 改 `target` 为 `http://localhost:8000`。Vite 配置不支持 HMR，必须重启 dev server。
+
+---
+
+## 问题31: 生成的测试用例不包含用例ID
+
+**现象**: 流水线 Stage 5 生成测试函数名为通用名（如 `test_initialization`），没有用例ID。
+
+**根因（三层）**:
+1. Sheet 污染: Excel 首个 Sheet "用例概览" 无"用例ID"列，旧代码 `headers[0]` 误取为ID
+2. 列索引硬编码: `TestCaseViewer.tsx` 和 `testhub.py` 都用 `headers[0]/[1]/[2]/[4]/[5]` 硬编码
+3. 提示词结构: `_build_test_prompt()` 源码放在用例需求之前，LLM 忽略用例ID
+
+**解决**:
+1. 前端 `findCol(headers, keywords)` 按关键词匹配列名，无ID列Sheet跳过
+2. 后端 `_find_col()` 同理
+3. 提示词重构: 用例需求置顶 + `TC-OTA-001 → def test_TC_OTA_001_xxx()` 强制映射示例 + 源码降级
+
+---
+
+## 问题32: 后端代码修改后不生效 — 僵尸进程
+
+**现象**: 修改后端文件后流水线行为不变，新增日志不输出。
+
+**根因**: 多个 Python 进程同时占 8000 端口，旧僵尸进程处理实际请求。`netstat -ano | findstr :8000` 显示两个 PID。
+
+**解决**: `taskkill /F /IM python.exe` 全杀后重启。
+
+---
+
+## 问题33: Python 3.14 PYTHONUTF8 崩溃
+
+**现象**: `Fatal Python error: preconfig_init_utf8_mode: invalid PYTHONUTF8 environment variable value`
+
+**根因**: `set PYTHONUTF8=1` 在 Python 3.14 被拒绝。
+
+**解决**: 改用 `python -X utf8`。同时修复 `start.bat`: `%~dp0` 替代硬编码、移除全杀进程、`npm run dev`。
