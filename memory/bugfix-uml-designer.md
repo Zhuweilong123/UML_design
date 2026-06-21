@@ -38,6 +38,10 @@ metadata:
 | 23 | 源代码产物翻倍 | `resume_pipeline` 被多次调用重复跑 Stage 3 | 后端/流水线 |
 | 24 | 优化需求弹窗消失 | 重复的空 `else if` 吞掉了 `request_instructions` 事件 | 前端 |
 | 25 | "检视完成继续"无响应 | 多条路径到达Stage 4但未注册等待逻辑 | 后端/流水线 |
+| 26 | ReAct 工具调用 coroutine 未 await | Tool.execute lambda 返回协程但引擎未 await | 后端/ReAct |
+| 27 | ReAct API 400 错误 | DeepSeek 不支持 OpenAI function calling 的 tool_calls 格式 | 后端/ReAct |
+| 28 | 优化仅1轮就停止 | LLM 自称完成但实际未修复，缺少验证机制 | 后端/流水线 |
+| 29 | 日志只记录最后一轮 | 优化结果被覆盖，历史未保存 | 后端/流水线 |
 
 ---
 
@@ -569,6 +573,72 @@ for fname, content in test_files.items():
 
 ---
 
+## 问题26: ReAct 引擎工具执行 coroutine 未 await
+
+**现象**: 工具调用返回值是 `<coroutine object>` 而不是实际结果字符串，引擎打印 `RuntimeWarning: coroutine was never awaited`。
+
+**根因**: `Tool.execute` 是 lambda 包装的异步函数（如 `_validate_syntax`），lambda 返回的是 coroutine 对象但引擎中直接使用返回值，没有 await。
+
+**解决**:
+- `Tool` 新增 `async run(**kwargs)` 方法，内部处理 coroutine vs 普通值：
+```python
+async def run(self, **kwargs) -> str:
+    result = self.execute(**kwargs)
+    if asyncio.coroutines.iscoroutine(result):
+        result = await result
+    return str(result)
+```
+- 引擎统一调用 `await tool.run(**func_args)` 替代原来的直接调用
+
+**Why:** Python 的 coroutine 必须显式 await，lambda 包装的 async 函数不会自动执行。
+
+---
+
+## 问题27: ReAct 引擎 DeepSeek API 400 错误
+
+**现象**: 运行流水线后所有 ReAct 阶段报错：
+```
+Error code: 400 - "An assistant message with tool_calls must be followed
+by tool messages responding to each tool_call_id"
+```
+
+**根因**: `deepseek-chat` 模型不兼容 OpenAI 原生 function calling 格式（`tools`/`tool_choice`/`tool_calls`消息）。消息格式不符合 DeepSeek 预期。
+
+**解决**: 改为纯文本方式实现工具调用：
+- LLM 输出使用 `THOUGHT:` + `ACTION:` + JSON 代码块格式
+- 引擎用正则解析 `ACTION: xxx` 和 JSON 参数
+- 工具结果作为普通 user 消息追加，不依赖特殊消息格式
+
+**优势**: 兼容所有 LLM（DeepSeek/GPT/Claude），上下文文件可读性更好，调试更容易。
+
+---
+
+## 问题28: 优化仅1轮就停止（LLM 虚假完成）
+
+**现象**: 跑完3轮优化但实际只有1轮有效，后两轮结果被覆盖。且 LLM 在测试仍有失败时自称"完成"。
+
+**根因**: 
+1. `finish_optimization` 的"成功"仅基于 LLM 声称，未重新验证
+2. 每轮结果互相覆盖，最终流水线日志只显示最后一轮
+
+**解决**:
+- 每轮 ReAct 优化后强制执行 `_execute_tests` 重新分析测试结果
+- 检查实际结果中是否有 `FAIL`，有则继续下一轮
+- 用 `rounds_history` 列表累积每轮结果，日志中逐轮展示
+
+---
+
+## 问题29: 优化日志只记录最后一轮
+
+**现象**: 流水线日志只显示最后一轮优化结果，无法对比各轮效果。
+
+**解决**: 
+- Stage 7 循环中新增 `rounds_history` 列表，每轮追加 `round_record`
+- 记录每轮的 ReAct 步骤、通过/失败数、通过率、失败用例
+- 日志中逐轮展示详情 + 优化效果对比表（轮次/通过/失败/通过率）
+
+---
+
 ## 关键技术要点总结
 
 1. **AntV X6 v2 自定义节点**: 使用 `Graph.registerNode()`（不是 `Node.registry.register()`），在创建 Graph 之前调用
@@ -591,8 +661,22 @@ for fname, content in test_files.items():
 18. **流水线暂停-恢复**: 多条代码路径可能到达同一阶段，每条都要注册暂停/恢复逻辑
 19. **skip 标志位**: 恢复函数要支持跳过已完成阶段，避免重复执行
 20. **WebSocket 生命周期**: 流水线完成/暂停/错误时都要发送明确事件，不能让前端靠 onclose 推断状态
+21. **LLM 兼容性**: 并非所有模型支持原生 function calling，文本格式更通用
+22. **虚假完成检测**: 不能信任 LLM 声称"已完成"，必须用实际测试结果验证
+23. **日志累积**: 迭代优化必须累积记录每轮结果，不能互相覆盖
 
 **Why:** 这些是项目开发中遇到的实际问题，记录了从设计文档到可运行代码的完整调试过程。
+
+**How to apply:** 
+- 新节点类型开发参考问题1-2的代码模式
+- npm 包更新时参考问题4的版本兼容性
+- X6 API 使用参考问题5的类型修正 + 问题12的 grid API
+- 端口和连线功能参考问题6 + 问题11的双向同步
+- LLM 集成时必须参考问题8做输出归一化
+- FastAPI 端点设计参考问题13的组合请求体模式
+- 编码问题参考问题17的 PYTHONUTF8 方案
+- GitHub 推送参考问题18-19的认证和代理
+- ReAct 引擎参考问题26-29的工具调用格式和验证机制
 
 **How to apply:** 
 - 新节点类型开发参考问题1-2的代码模式

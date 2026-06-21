@@ -33,6 +33,7 @@ interface UiState {
   showingOptimized: boolean;
   optimizeInstructions: string; // last optimization request content
   showTestCaseInCanvas: boolean; // toggle main canvas to show test cases
+  testCaseData: string; // Excel test case summary for pipeline Stage 5
 
   // Pipeline
   activePipelineId: string | null;
@@ -63,6 +64,7 @@ interface UiState {
   setShowingOptimized: (v: boolean) => void;
   toggleTestCaseInCanvas: () => void;
   setShowTestCaseInCanvas: (v: boolean) => void;
+  setTestCaseData: (data: string) => void;
 
   setActivePipelineId: (id: string | null) => void;
 
@@ -89,6 +91,7 @@ export const useUiStore = create<UiState>((set) => ({
   showingOptimized: false,
   optimizeInstructions: '',
   showTestCaseInCanvas: false,
+  testCaseData: '',
   activePipelineId: null,
   fileDialogVisible: false,
   exportDialogVisible: false,
@@ -127,6 +130,7 @@ export const useUiStore = create<UiState>((set) => ({
   setShowingOptimized: (v) => set({ showingOptimized: v }),
   toggleTestCaseInCanvas: () => set((s) => ({ showTestCaseInCanvas: !s.showTestCaseInCanvas })),
   setShowTestCaseInCanvas: (v) => set({ showTestCaseInCanvas: v }),
+  setTestCaseData: (data) => set({ testCaseData: data }),
 
   setActivePipelineId: (id) => set({ activePipelineId: id }),
 

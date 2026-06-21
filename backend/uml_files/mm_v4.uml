@@ -32,7 +32,7 @@
       "methods": [
         {
           "name": "execute",
-          "return_type": "",
+          "return_type": "void",
           "params": "",
           "visibility": "+",
           "is_static": false,
@@ -86,7 +86,7 @@
       "methods": [
         {
           "name": "scheduleNextCrow",
-          "return_type": "",
+          "return_type": "void",
           "params": "",
           "visibility": "+",
           "is_static": false,
@@ -94,7 +94,7 @@
         },
         {
           "name": "clearCrowFlag",
-          "return_type": "",
+          "return_type": "void",
           "params": "",
           "visibility": "+",
           "is_static": false,
@@ -127,23 +127,23 @@
       "methods": [
         {
           "name": "addTask",
-          "return_type": "",
-          "params": "",
+          "return_type": "void",
+          "params": "BaseTask task",
           "visibility": "+",
           "is_static": false,
           "is_abstract": false
         },
         {
           "name": "removeTask",
-          "return_type": "",
-          "params": "",
+          "return_type": "void",
+          "params": "String taskId",
           "visibility": "+",
           "is_static": false,
           "is_abstract": false
         },
         {
           "name": "executeTasks",
-          "return_type": "",
+          "return_type": "void",
           "params": "",
           "visibility": "+",
           "is_static": false,
@@ -183,7 +183,7 @@
       "methods": [
         {
           "name": "start",
-          "return_type": "",
+          "return_type": "void",
           "params": "",
           "visibility": "+",
           "is_static": false,
@@ -191,7 +191,7 @@
         },
         {
           "name": "stop",
-          "return_type": "",
+          "return_type": "void",
           "params": "",
           "visibility": "+",
           "is_static": false,
@@ -300,6 +300,14 @@
           "visibility": "+",
           "is_static": false,
           "is_abstract": false
+        },
+        {
+          "name": "registerToScheduler",
+          "return_type": "void",
+          "params": "TaskScheduler scheduler",
+          "visibility": "#",
+          "is_static": false,
+          "is_abstract": false
         }
       ],
       "position": {
@@ -310,23 +318,13 @@
         "width": 200.0,
         "height": 150.0
       },
-      "note": "任务基类，所有任务类型的公共接口和属性"
+      "note": "任务基类，所有任务类型的公共接口和属性，通过表驱动注册到调度器"
     }
   ],
   "relations": [
     {
-      "id": "rel_1780061173848_rfrpwc",
-      "source": "class_1780061055677_g3krq5",
-      "target": "class_1780061071670_hbisqo",
-      "type": "aggregation",
-      "multiplicity_source": "",
-      "multiplicity_target": "",
-      "role_name": "",
-      "note": ""
-    },
-    {
-      "id": "rel_1780061202774_0eic7h",
-      "source": "class_1780061050311_lb7790",
+      "id": "rel_1780061400000_base_scheduler",
+      "source": "class_1780061400000_base",
       "target": "class_1780061071670_hbisqo",
       "type": "aggregation",
       "multiplicity_source": "",
@@ -338,16 +336,6 @@
       "id": "rel_1780061271534_8hqacf",
       "source": "class_1780061071670_hbisqo",
       "target": "class_1780061210919_ig6huh",
-      "type": "aggregation",
-      "multiplicity_source": "",
-      "multiplicity_target": "",
-      "role_name": "",
-      "note": ""
-    },
-    {
-      "id": "rel_1780061300001_sentinel_scheduler",
-      "source": "class_1780061300000_sentinel",
-      "target": "class_1780061071670_hbisqo",
       "type": "aggregation",
       "multiplicity_source": "",
       "multiplicity_target": "",

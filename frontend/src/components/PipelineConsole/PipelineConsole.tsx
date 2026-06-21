@@ -167,7 +167,11 @@ const PipelineConsole: React.FC = () => {
   // Confirm case review (Stage 4)
   const handleConfirmCaseReview = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({ action: 'confirm_case_review' }));
+    const testCases = useUiStore.getState().testCaseData;
+    wsRef.current.send(JSON.stringify({
+      action: 'confirm_case_review',
+      test_cases: testCases,
+    }));
     setCurrentAction('✅ 用例检视确认，继续流水线...');
   }, []);
 

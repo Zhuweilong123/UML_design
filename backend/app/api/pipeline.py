@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.services.pipeline_service import (
     create_pipeline, get_pipeline, confirm_stage,
     run_pipeline, resume_pipeline, resume_with_instructions,
-    stop_pipeline, _is_stopped, _update_stage,
+    stop_pipeline, _is_stopped, _update_stage, _save_pipeline_log,
 )
 from app.models.pipeline import StageName, StageStatus
 
@@ -118,6 +118,9 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                         for s in pipeline.stages:
                             if s.name == StageName.CASE_REVIEW:
                                 s.status = StageStatus.SUCCESS
+                        # Store test case data from frontend for Stage 5
+                        test_cases_data = msg.get("test_cases", "")
+                        pipeline.stages[3].result = {"test_cases": test_cases_data}
                         await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
                     async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
                         if _is_stopped(pipeline_id):
@@ -188,13 +191,17 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                     await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                     return
                 elif msg.get("action") == "confirm_case_review":
-                    # Mark case_review as success and continue
+                    # Mark case_review as success, store test cases, and continue
                     pipeline = get_pipeline(pipeline_id)
                     if pipeline:
                         for s in pipeline.stages:
                             if s.name == StageName.CASE_REVIEW:
                                 s.status = StageStatus.SUCCESS
-                        await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "用户确认通过"))
+                        # Store test case data from frontend for Stage 5
+                        tc = msg.get("test_cases", "")
+                        pipeline.stages[3].result = {"test_cases": tc}
+                        print(f"[Pipeline] Stored test_cases: {len(tc)} chars", flush=True)
+                        await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
                     # Resume from Stage 5 (Test Gen), skip case review
                     async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
                         if _is_stopped(pipeline_id):
@@ -212,6 +219,17 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
                 break
             await ws.send_json(event)
 
+            # Save incremental log after key stage completions
+            if event.get("event") == "stage_update" and event.get("status") in ("success", "failed"):
+                stage_name = event.get("stage", "")
+                if stage_name in ("code_gen", "test_gen", "test_exec", "code_optimize"):
+                    p = get_pipeline(pipeline_id)
+                    if p:
+                        try:
+                            _save_pipeline_log(p, diagram, language)
+                        except Exception:
+                            pass
+
             # If waiting for instructions, pause and collect
             if event.get("event") == "request_instructions":
                 need_confirm = await wait_for_instructions()
@@ -228,6 +246,14 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
             if event.get("event") == "request_case_review":
                 await wait_for_case_review()
                 break
+
+        # Save pipeline log before completing
+        pipeline = get_pipeline(pipeline_id)
+        if pipeline:
+            try:
+                _save_pipeline_log(pipeline, diagram, language)
+            except Exception as log_e:
+                print(f"[Pipeline] Failed to save log: {log_e}")
 
         # Pipeline completed successfully
         await ws.send_json({"event": "pipeline_complete", "pipeline_id": pipeline_id, "message": "流水线执行完成"})

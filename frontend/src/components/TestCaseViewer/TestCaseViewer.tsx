@@ -25,7 +25,7 @@ interface SheetData {
 }
 
 const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
-  const { selectedLanguage, setRightPanelTab, setRightPanelVisible } = useUiStore();
+  const { selectedLanguage, setRightPanelTab, setRightPanelVisible, setTestCaseData } = useUiStore();
 
   const [files, setFiles] = useState<Array<{ name: string; path: string }>>([]);
   const [currentFile, setCurrentFile] = useState('');
@@ -68,10 +68,34 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       setActiveSheet(data.sheet_names?.[0] || '');
       setChangedCases([]);
       addLog('load', `Loaded: ${filename}`, filename);
+
+      // Build summary for pipeline Stage 5
+      buildAndSaveSummary(data.sheets as Record<string, SheetData>);
     } catch {
       message.error('加载测试文件失败');
     }
     setLoading(false);
+  };
+
+  const buildAndSaveSummary = (sheetsData: Record<string, SheetData>) => {
+    const lines: string[] = [];
+    for (const [sname, sdata] of Object.entries(sheetsData)) {
+      const headers = sdata.headers || [];
+      const rows = sdata.rows || [];
+      if (rows.length === 0) continue;
+      lines.push(`## Sheet: ${sname}`);
+      for (const row of rows) {
+        const id = row[headers[0]] || '';
+        const name = row[headers[1]] || '';
+        const priority = row[headers[2]] || '';
+        const steps = row[headers[4]] || '';
+        const expected = row[headers[5]] || '';
+        if (id && name) {
+          lines.push(`- [${id}] ${name} (${priority})\n  Steps: ${steps}\n  Expected: ${expected}`);
+        }
+      }
+    }
+    setTestCaseData(lines.join('\n'));
   };
 
   const addLog = (action: string, comment: string, filename?: string, sheet?: string, caseId?: string) => {

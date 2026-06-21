@@ -82,17 +82,30 @@ Only output the JSON object, no other text.
     return prompt
 
 
-def _build_test_prompt(code_files: dict[str, str], language: str) -> str:
-    """Build a prompt to generate tests for the given code."""
+def _build_test_prompt(code_files: dict[str, str], language: str, test_cases: str = "") -> str:
+    """Build a prompt to generate tests for the given code, using Excel test case requirements."""
     code_block = "\n\n".join(
         f"### {fname}\n```{language}\n{content}\n```"
         for fname, content in code_files.items()
     )
-    prompt = f"""Generate comprehensive unit tests for the following {language} code.
 
-{code_block}
+    if test_cases and test_cases.strip():
+        cases_section = f"""## Test Case Requirements (MUST cover every case below):
+{test_cases[:4000]}
 
-## Requirements:
+## CRITICAL RULES:
+1. Create ONE test function for EACH test case ID. The function name MUST contain the test case ID.
+   Example: For TC-OTA-001 "OtaTask.execute normal execution", create `def test_TC_OTA_001_ota_execute():`
+2. In each test function's docstring, include the full test case details (steps + expected result).
+3. Write tests using the standard testing framework for {language}.
+4. Return the result as a JSON object mapping test filenames to content:
+```json
+{{"test_filename.ext": "content..."}}
+```
+Only output the JSON object, no other text.
+"""
+    else:
+        cases_section = f"""## Requirements:
 - Write tests using the standard testing framework for {language}.
 - Cover all public methods and edge cases.
 - Return the result as a JSON object mapping test filenames to content:
@@ -101,7 +114,13 @@ def _build_test_prompt(code_files: dict[str, str], language: str) -> str:
 ```
 Only output the JSON object, no other text.
 """
-    return prompt
+
+    return f"""Generate comprehensive unit tests for the following {language} code.
+
+## Source Code:
+{code_block}
+
+{cases_section}"""
 
 
 async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
@@ -115,6 +134,7 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
         system_prompt=f"You are an expert {language} developer. Output only valid JSON mapping filenames to file content.",
         temperature=0.3,
         max_tokens=8192,
+        json_mode=True,
     )
 
     # Parse JSON from response
@@ -133,10 +153,14 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
 
 
 async def generate_tests(
-    code_files: dict[str, str], language: str
+    code_files: dict[str, str], language: str, test_cases: str = ""
 ) -> dict[str, str]:
-    """Generate test files for the given code."""
-    prompt = _build_test_prompt(code_files, language)
+    """Generate test files for the given code, optionally using Excel test case requirements."""
+    import sys
+    msg = f"[generate_tests] test_cases length: {len(test_cases) if test_cases else 0}, first 100: {test_cases[:100] if test_cases else '(EMPTY)'}"
+    print(msg, flush=True)
+    sys.stderr.write(msg + '\n')
+    prompt = _build_test_prompt(code_files, language, test_cases)
     response = await chat(
         prompt=prompt,
         system_prompt=f"You are an expert {language} test engineer. Output only valid JSON.",

@@ -23,6 +23,7 @@ async def chat(
     system_prompt: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 4096,
+    json_mode: bool = False,
 ) -> str:
     """Single-turn chat completion."""
     client = get_client()
@@ -31,12 +32,16 @@ async def chat(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    response = await client.chat.completions.create(
+    kwargs = dict(
         model=settings.deepseek_model,
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
     )
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    response = await client.chat.completions.create(**kwargs)
     return response.choices[0].message.content or ""
 
 
