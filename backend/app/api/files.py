@@ -1,7 +1,6 @@
 """File operations API – new, open, save, export, browse, review."""
 
 import os
-import re
 from datetime import datetime
 from pydantic import BaseModel
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
@@ -13,6 +12,7 @@ from app.services.file_service import (
 )
 from app.core.config import get_settings
 from app.core.auth import require_auth
+from app.core.security import safe_path, resolve_path, sanitize_path_segment
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -29,7 +29,7 @@ async def save_file(diagram: UmlDiagram, filename: str = ""):
     filepath = None
     if filename:
         # Sanitize filename — strip path and dangerous chars
-        safe_name = _sanitize_path_segment(filename.replace(".uml", ""))
+        safe_name = sanitize_path_segment(filename.replace(".uml", ""))
         if safe_name:
             safe_name += ".uml"
             filepath = os.path.join(get_settings().uml_dir, safe_name)
@@ -42,7 +42,7 @@ async def open_file(filepath: str):
     """Open a saved UML diagram file. Only allows .uml files within the project."""
     # Validate path stays within project
     try:
-        safe = _safe_path(filepath)
+        safe = safe_path(filepath)
     except HTTPException:
         raise HTTPException(status_code=403, detail="Access denied")
     if not safe.endswith(".uml"):
@@ -96,66 +96,26 @@ async def upload_excel(file: UploadFile = File(...)):
     return {"filename": file.filename, "sheets": sheets, "sheet_names": xls.sheet_names}
 
 
-# ── Path safety helpers ───────────────────────────────────
-
-def _sanitize_path_segment(segment: str) -> str:
-    """Remove dangerous characters from a single path component.
-
-    Returns an empty string if the segment is unsafe."""
-    if not segment:
-        return ""
-    # Strip directory traversal sequences
-    cleaned = segment.replace("\\", "/").replace("..", "").lstrip("/")
-    # Keep only alphanumeric, dash, underscore, dot
-    cleaned = re.sub(r"[^\w\-.]", "_", cleaned)
-    return cleaned.strip("_") or ""
-
-
-def _safe_path(user_path: str) -> str:
-    """Resolve a user-supplied path and ensure it stays within the project root.
-
-    Raises HTTPException(403) on directory traversal attempt.
-    """
-    settings = get_settings()
-    # Resolve the project root (parent of backend/)
-    project_root = os.path.abspath(os.path.join(settings.uml_dir, "..", ".."))
-
-    if not user_path:
-        return os.path.abspath(settings.uml_dir)
-
-    # If relative, anchor it to the project root
-    if not os.path.isabs(user_path):
-        candidate = os.path.abspath(os.path.join(project_root, user_path))
-    else:
-        candidate = os.path.abspath(user_path)
-
-    # Resolve symlinks to defeat symlink-based escapes
-    try:
-        real_candidate = os.path.realpath(candidate)
-        real_root = os.path.realpath(project_root)
-    except (OSError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    # Must be within the project root
-    if os.path.commonpath([real_candidate, real_root]) != real_root:
-        raise HTTPException(status_code=403, detail="Access denied: path outside project")
-
-    return real_candidate
-
-
 # ── Directory browsing ──────────────────────────────────
 
 @router.get("/browse")
-async def browse_directory(path: str = ""):
-    """Browse a directory. Returns subdirectories and .uml files."""
-    settings = get_settings()
+async def browse_directory(path: str = "", safe: bool = True):
+    """Browse a directory. Returns subdirectories and .uml files.
 
-    try:
-        base = _safe_path(path)
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
+    Set safe=false to allow browsing any path on disk (pipeline directory selection).
+    """
+    settings = get_settings()
+    path_resolver = safe_path if safe else resolve_path
+
+    if not path:
+        base = os.path.abspath(settings.uml_dir)
+    else:
+        try:
+            base = path_resolver(path)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
 
     if not os.path.exists(base) or not os.path.isdir(base):
         base = os.path.abspath(settings.uml_dir)
@@ -180,16 +140,21 @@ async def browse_directory(path: str = ""):
                 "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             })
 
-    project_root = os.path.abspath(os.path.join(settings.uml_dir, "..", ".."))
+    # Parent navigation: always allowed when unrestricted; checked when restricted
     parent = ""
-    if base != project_root and base != os.path.abspath(settings.uml_dir):
+    if safe:
+        project_root = os.path.abspath(os.path.join(settings.uml_dir, "..", ".."))
+        if base != project_root and base != os.path.abspath(settings.uml_dir):
+            parent_dir = os.path.dirname(base)
+            try:
+                safe_path(parent_dir)
+                parent = parent_dir.replace("\\", "/")
+            except HTTPException:
+                parent = ""
+    else:
         parent_dir = os.path.dirname(base)
-        # Only allow parent if it's within the project
-        try:
-            _safe_path(parent_dir)
+        if parent_dir != base:
             parent = parent_dir.replace("\\", "/")
-        except HTTPException:
-            parent = ""
 
     return {
         "current": base.replace("\\", "/"),
@@ -250,8 +215,8 @@ async def save_generated_code(req: SaveGeneratedRequest):
     base = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "generated"))
 
     # Sanitize project_name and language to prevent path traversal
-    safe_project = _sanitize_path_segment(req.project_name) or "project"
-    safe_lang = _sanitize_path_segment(req.language) or "python"
+    safe_project = sanitize_path_segment(req.project_name) or "project"
+    safe_lang = sanitize_path_segment(req.language) or "python"
 
     # Create project folders
     src_dir = os.path.join(base, "src", safe_project, safe_lang)

@@ -219,8 +219,14 @@ metadata:
 | F21 | API 鉴权 (Bearer Token) | 安全 |
 | F22 | 路径安全校验 | 安全 |
 | F23 | 真实 pytest 线程执行 | 测试 |
+| F24 | 已有项目目录支持（源码+测试） | 流水线 |
+| F25 | 目录选择持久化 (localStorage) | 前端 |
+| F26 | LLM JSON 解析增强 | LLM |
+| F27 | Stage 7 测试上下文感知 | 流水线 |
+| F28 | Stage 6 编译错误精确分类 | 流水线 |
+| F29 | 默认路径扁平化 | 后端 |
 
-**总计: 23 项功能迭代**
+**总计: 29 项功能迭代**
 
 ---
 
@@ -254,4 +260,69 @@ metadata:
   - 改用 `asyncio.to_thread()` + 同步 `subprocess.run()` 在线程池中执行 pytest
   - 日志明确标注 `LLM SIMULATION MODE` vs `Running real pytest`
   - 同时捕获 `NotImplementedError` 作为额外回退保护
+- **关键文件**: `backend/app/services/pipeline_service.py`
+
+---
+
+## F24 - 已有项目目录支持
+
+- **描述**:
+  - 流水线启动前可选择已有的源码目录和测试代码目录
+  - 源码目录有文件 → Stage 3 调用 `adapt_code_to_uml` 根据 UML 适配已有代码
+  - 源码目录空 → Stage 3 从 UML 全新生成（原行为）
+  - 测试目录有文件 → Stage 5 调用 `update_tests_incremental` 根据用例检视增量更新
+  - 测试目录空 → Stage 5 从用例全新生成（原行为）
+  - 支持任意磁盘路径，浏览时不做项目边界限制
+  - 用户目录不会被 `shutil.rmtree` 清空
+- **关键文件**: `backend/app/core/security.py`, `backend/app/services/pipeline_service.py`, `backend/app/services/code_generator.py`, `backend/app/api/pipeline.py`, `backend/app/api/files.py`, `frontend/src/components/PipelineConsole/PipelineConsole.tsx`
+
+---
+
+## F25 - 目录选择持久化
+
+- **描述**:
+  - `pipelineSourceDir` 和 `pipelineTestDir` 通过 `localStorage` 持久化
+  - 页面刷新、关闭重开后自动恢复上次选择
+  - 目录选择框从"仅空状态可见"改为"非运行状态始终可见"
+- **关键文件**: `frontend/src/stores/uiStore.ts`, `frontend/src/components/PipelineConsole/PipelineConsole.tsx`
+
+---
+
+## F26 - LLM JSON 解析增强
+
+- **描述**:
+  - `clean_llm_json_response` 三层回退提取：```` ```json ``` ```` → ```` ``` ```` → 括号配对 `{...}`
+  - `generate_tests`、`adapt_code_to_uml`、`update_tests_incremental` 加 `json_mode=True`
+  - `_optimize_source_from_tests` 加 `json_mode=True`
+- **关键文件**: `backend/app/services/tools.py`, `backend/app/services/code_generator.py`
+
+---
+
+## F27 - Stage 7 测试上下文感知
+
+- **描述**:
+  - `_optimize_source_from_tests` 的 LLM prompt 现在包含完整测试代码（上限 4000 字符）
+  - LLM 能从测试代码了解缺失函数的签名和语义，正确添加实现
+  - 保留"只改源码不改测试"原则
+- **关键文件**: `backend/app/services/pipeline_service.py`
+
+---
+
+## F28 - Stage 6 编译错误精确分类
+
+- **描述**:
+  - `_extract_fatal_errors` 区分模块级和对象级 `AttributeError`
+  - 模块级（`module 'X' has no attribute`）→ Stage 6 修复（import 路径错误）
+  - 对象级（`'Foo' object has no attribute`）→ 交给 Stage 7（源码缺方法）
+  - 避免 Stage 6 误拦截并阻断流水线
+- **关键文件**: `backend/app/services/pipeline_service.py`
+
+---
+
+## F29 - 默认路径扁平化
+
+- **描述**:
+  - `_save_generated_files` 和 `_execute_tests` 默认路径从 `generated/{src,test}/{project}/{language}/` 改为 `generated/{src,test}/`
+  - 与用户选择自定义目录时的扁平结构保持一致
+  - 删除了所有旧嵌套目录残留
 - **关键文件**: `backend/app/services/pipeline_service.py`

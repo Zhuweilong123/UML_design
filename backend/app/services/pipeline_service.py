@@ -13,8 +13,10 @@ from app.models.pipeline import (
 from app.services.llm_service import chat
 from app.services.code_generator import (
     generate_code, generate_tests, optimize_uml,
+    adapt_code_to_uml, update_tests_incremental,
 )
 from app.core.config import get_settings
+from app.core.security import safe_path, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -270,19 +272,30 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
     return filepath
 
 
-def _save_generated_files(project_name: str, language: str, src: dict, test: dict = None):
-    """Save generated code files to generated/ directory."""
+def _save_generated_files(
+    project_name: str, language: str, src: dict, test: dict = None,
+    target_src_dir: str = "", target_test_dir: str = "",
+):
+    """Save generated code files.
+
+    If target_src_dir / target_test_dir are provided, save to those paths
+    instead of the default generated/ directory.  User directories are NEVER
+    wiped — only individual files are overwritten.
+    """
     settings = get_settings()
     base = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "generated"))
     os.makedirs(base, exist_ok=True)
 
     result = {"src": [], "test": []}
-    # Sanitize project name for filesystem
-    safe_name = "".join(c for c in project_name if c.isalnum() or c in "._- ").strip() or "project"
+
+    # Determine source directory
+    if target_src_dir:
+        src_dir = target_src_dir
+    else:
+        src_dir = os.path.join(base, "src")
+    os.makedirs(src_dir, exist_ok=True)
 
     if src:
-        src_dir = os.path.join(base, "src", safe_name, language)
-        os.makedirs(src_dir, exist_ok=True)
         for fname, content in src.items():
             fp = os.path.join(src_dir, fname)
             try:
@@ -293,10 +306,17 @@ def _save_generated_files(project_name: str, language: str, src: dict, test: dic
             except Exception as e:
                 logger.warning(f"[Pipeline] Failed to save {fp}: {e}")
 
+    # Determine test directory
+    is_user_dir = bool(target_test_dir)
+    if target_test_dir:
+        test_dir = target_test_dir
+    else:
+        test_dir = os.path.join(base, "test")
+    os.makedirs(test_dir, exist_ok=True)
+
     if test:
-        test_dir = os.path.join(base, "test", safe_name, language)
-        # Clean old test files to avoid stale tests being collected by pytest
-        if os.path.exists(test_dir):
+        # Only auto-clean the internal generated/ directory, NOT user directories
+        if not is_user_dir and os.path.exists(test_dir):
             import shutil
             shutil.rmtree(test_dir)
         os.makedirs(test_dir, exist_ok=True)
@@ -322,11 +342,14 @@ async def resume_with_instructions(
     diagram: UmlDiagram,
     instructions: str,
     language: str = "python",
+    source_dir: str = "",
+    test_dir: str = "",
 ) -> AsyncIterator[dict]:
     """Resume pipeline from Stage 1 with optimization instructions."""
     async for event in run_pipeline(
         pipeline_id, diagram, language,
         auto_confirm=False, instructions=instructions,
+        source_dir=source_dir, test_dir=test_dir,
     ):
         yield event
 
@@ -396,6 +419,8 @@ async def run_pipeline(
     auto_confirm: bool = False,
     test_cases: list[dict] | None = None,
     instructions: str = "",
+    source_dir: str = "",
+    test_dir: str = "",
 ) -> AsyncIterator[dict]:
     """Run the 7-stage pipeline, yielding progress updates."""
     pipeline = _pipelines.get(pipeline_id)
@@ -445,25 +470,53 @@ async def run_pipeline(
         return  # Wait for confirm_stage() call to resume
 
     # --- Stage 3: Code Gen ---
-    yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
-    try:
-        current_code = await generate_code(optimized_diagram, language)
-        if not current_code:
-            logger.error("[Pipeline Stage 3] generate_code returned empty — LLM JSON parse likely failed")
-            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
-                                       "Code generation failed: LLM returned no valid code files")
+    # If source_dir provided and has files → adapt existing code to UML
+    # Otherwise → generate from UML (existing behavior)
+    if source_dir:
+        existing_code = _load_files_from_directory(source_dir, language)
+        if existing_code:
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING,
+                                       f"Adapting {len(existing_code)} existing source files to UML...")
+            try:
+                current_code = await adapt_code_to_uml(existing_code, optimized_diagram, language)
+                if not current_code:
+                    logger.error("[Pipeline Stage 3] adapt_code_to_uml returned empty")
+                    yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
+                                               "Code adaptation failed: LLM returned no valid code files")
+                    return
+                for fname, content in current_code.items():
+                    pipeline.code_artifacts.append(CodeArtifact(
+                        language=language, filename=fname, content=content,
+                    ))
+                pipeline.stages[2].result = {"files": list(current_code.keys())}
+                _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
+                pipeline.stages[2].logs = f"Adapted {len(existing_code)} existing files → {len(current_code)} files from: {source_dir}"
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+            except Exception as e:
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
+                return
+
+    if not current_code:
+        # No existing code → generate from UML (original behavior)
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+        try:
+            current_code = await generate_code(optimized_diagram, language)
+            if not current_code:
+                logger.error("[Pipeline Stage 3] generate_code returned empty — LLM JSON parse likely failed")
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
+                                           "Code generation failed: LLM returned no valid code files")
+                return
+            for fname, content in current_code.items():
+                pipeline.code_artifacts.append(CodeArtifact(
+                    language=language, filename=fname, content=content,
+                ))
+            pipeline.stages[2].result = {"files": list(current_code.keys())}
+            _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
+            pipeline.stages[2].logs = "Generated: generated/src/"
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+        except Exception as e:
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
             return
-        for fname, content in current_code.items():
-            pipeline.code_artifacts.append(CodeArtifact(
-                language=language, filename=fname, content=content,
-            ))
-        pipeline.stages[2].result = {"files": list(current_code.keys())}
-        _save_generated_files(diagram.name, language, current_code)
-        pipeline.stages[2].logs = f"Saved: generated/src/{diagram.name}/{language}/"
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
-    except Exception as e:
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
-        return
 
     # --- Stage 4: Case Review ---
     yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.RUNNING,
@@ -484,6 +537,8 @@ async def _run_test_and_optimize(
     language: str,
     current_code: dict,
     test_files: dict,
+    source_dir: str = "",
+    test_dir: str = "",
 ) -> AsyncIterator[dict]:
     """Stage 6: fix compilation errors only. Stage 7: optimize source code using real test results."""
 
@@ -496,7 +551,7 @@ async def _run_test_and_optimize(
     # Step 6a: Run pytest, fix only fatal errors (import/syntax/NameError)
     fatal_still_remain = False
     for fix_round in range(1, 3):
-        test_results_text = await _execute_tests(test_files, language, diagram.name)
+        test_results_text = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
         fatal_errors = _extract_fatal_errors(test_results_text)
 
         if not fatal_errors:
@@ -523,14 +578,14 @@ async def _run_test_and_optimize(
             "fix_round": fix_round,
         }
         # Save fixed test files to disk
-        _save_generated_files(diagram.name, language, {}, test_files)
+        _save_generated_files(diagram.name, language, {}, test_files, target_test_dir=test_dir)
 
     else:
         fatal_still_remain = True
         logger.warning(f"[Stage6] Compilation errors persist after 2 rounds")
 
     # Step 6b: Final verification
-    test_results_text = await _execute_tests(test_files, language, diagram.name)
+    test_results_text = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
     final_fatal = _extract_fatal_errors(test_results_text)
     total_tests = _count_tests(test_results_text)
 
@@ -574,10 +629,10 @@ async def _run_test_and_optimize(
             current_code = optimized_code
 
         # Save optimized source code
-        _save_generated_files(diagram.name, language, current_code)
+        _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
 
         # Re-run real pytest to verify
-        new_test_results = await _execute_tests(test_files, language, diagram.name)
+        new_test_results = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
 
         # Parse results
         import re as _re
@@ -591,10 +646,10 @@ async def _run_test_and_optimize(
         if round_num > 1 and pass_rate < prev_pass_rate:
             logger.warning(f"[Stage7] Round {round_num}: REGRESSION {prev_pass_rate}% → {pass_rate}%, rolling back")
             current_code = prev_code
-            _save_generated_files(diagram.name, language, current_code)
+            _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
             rolled_back = True
             # Re-run pytest on rolled-back code to get consistent results
-            new_test_results = await _execute_tests(test_files, language, diagram.name)
+            new_test_results = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
             passed = len(_re.findall(r'->\s*PASS', new_test_results, _re.IGNORECASE))
             failed = len(_re.findall(r'->\s*FAIL', new_test_results, _re.IGNORECASE))
             total = passed + failed
@@ -676,21 +731,34 @@ def _validate_files_match(new_files: dict, original: dict, tag: str) -> bool:
 
 
 def _extract_fatal_errors(test_results_text: str) -> list[str]:
-    """Extract only compilation-level errors (ImportError, SyntaxError, NameError,
-    ModuleNotFoundError, bad AttributeError from mock targets) from test results.
-    Does NOT include AssertionError — those are test logic failures, not compilation issues."""
+    """Extract only compilation-level errors from test results.
+
+    Fatal = code cannot even run (bad imports, syntax, undefined names).
+    NOT fatal = AssertionError (test logic), object-level AttributeError
+    (missing method — that's Stage 7's job to add to source code).
+    """
     import re
     fatal_keywords = [
         "ImportError", "ModuleNotFoundError", "SyntaxError", "NameError",
-        "cannot import", "No module named", "has no attribute", "Can't instantiate",
+        "cannot import", "No module named", "Can't instantiate",
     ]
     errors = []
     for line in test_results_text.split("\n"):
-        if "-> FAIL" in line:
-            for kw in fatal_keywords:
-                if kw in line:
-                    errors.append(line.strip())
-                    break
+        if "-> FAIL" not in line:
+            continue
+        for kw in fatal_keywords:
+            if kw in line:
+                errors.append(line.strip())
+                break
+        else:
+            # Module-level AttributeError (e.g. "module 'X' has no attribute 'Y'")
+            # → fatal because the import path is wrong.
+            # Object-level AttributeError (e.g. "'Foo' object has no attribute 'bar'")
+            # → NOT fatal, let Stage 7 add the missing method to source code.
+            if "has no attribute" in line and "' object has no attribute" not in line:
+                errors.append(line.strip())
+            elif "does not have the attribute" in line:
+                errors.append(line.strip())
     return errors
 
 
@@ -787,45 +855,53 @@ async def _optimize_source_from_tests(
     language: str,
     round_num: int,
 ) -> dict[str, str]:
-    """Ask LLM to optimize source code based on real pytest failures."""
+    """Ask LLM to optimize source code based on real pytest failures.
+
+    Returns updated source code only (test code is never modified by Stage 7).
+    The LLM receives the test code for context so it can understand what API
+    the tests expect and add missing functions/attributes to the source.
+    """
     src_text = "\n\n".join(
         f"### {fname}\n```{language}\n{content}\n```"
         for fname, content in source_code.items()
     )
+    test_text = "\n\n".join(
+        f"### {fname}\n```{language}\n{content}\n```"
+        for fname, content in test_files.items()
+    )
     failures = [l for l in test_results.split("\n") if "-> FAIL" in l]
-    MAX_SRC = 8000
 
-    trunc_note = ""
-    if len(src_text) > MAX_SRC:
-        trunc_note += f"⚠️ Source code truncated from {len(src_text)} to {MAX_SRC} chars. "
-    if trunc_note:
-        logger.warning(f"[Stage7] Truncation: {trunc_note}")
+    prompt = f"""Fix the source code to make the failing tests pass.  You may ONLY modify source files.
 
-    prompt = f"""Fix the source code to make the failing tests pass.
-
-{trunc_note}
 ## Source Code (modify this):
-{src_text[:MAX_SRC]}
+{src_text[:6000]}
+
+## Test Code (for reference — understand what API the tests expect):
+{test_text[:4000]}
 
 ## Test Failures ({len(failures)} failing):
-{chr(10).join(failures[:40])}
+{chr(10).join(failures[:30])}
 
-## Requirements:
-- Analyze each failure and fix the SOURCE CODE (not the test code)
-- Keep the public API compatible with existing tests
-- Return the COMPLETE corrected source files as a JSON object mapping filenames to content
-- Only output the JSON object, no other text.
+## Rules:
+- Only return MODIFIED source files — do NOT return test files
+- If a test tries to access a function/attribute that does not exist → add it to the source
+- If a test gets an AttributeError on a module → the module is missing an export, add it
+- Keep the public API compatible with ALL tests (passing AND failing)
+- Return the COMPLETE corrected source files as a JSON object
 
 ```json
 {{"file1.py": "full corrected content...", "file2.py": "full corrected content..."}}
 ```
+Only output the JSON object, no other text.
 """
-    logger.info(f"[Stage7] Round {round_num}: asking LLM to fix {len(failures)} test failures")
+    logger.info(f"[Stage7] Round {round_num}: asking LLM to fix {len(failures)} test failures (source only)")
+
     response = await chat(
         prompt=prompt,
         system_prompt=f"You are an expert {language} developer. Fix source code to make tests pass. Output only valid JSON.",
         temperature=0.3,
         max_tokens=8192,
+        json_mode=True,
     )
     try:
         from app.services.tools import clean_llm_json_response
@@ -847,21 +923,51 @@ async def _optimize_source_from_tests(
         return source_code
 
 
+def _load_files_from_directory(dir_path: str, language: str) -> dict[str, str]:
+    """Load code files from an arbitrary directory. Returns {filename: content}.
+
+    Returns {} if the directory is empty, doesn't exist, or path is invalid.
+    """
+    if not dir_path:
+        return {}
+
+    from pathlib import Path
+
+    # Normalise the path (no project-boundary restriction for pipeline use)
+    try:
+        resolved = resolve_path(dir_path)
+    except Exception as e:
+        logger.warning(f"[Loader] Path rejected: {dir_path} — {e}")
+        return {}
+
+    target = Path(resolved)
+    if not target.exists() or not target.is_dir():
+        logger.warning(f"[Loader] Directory not found or not a directory: {resolved}")
+        return {}
+
+    VALID_EXTENSIONS = {
+        ".py", ".ts", ".js", ".java", ".go", ".rs", ".rb", ".swift", ".kt",
+        ".php", ".cs", ".cpp", ".h", ".hpp",
+    }
+
+    result = {}
+    for fp in target.iterdir():
+        if fp.is_file() and fp.suffix in VALID_EXTENSIONS:
+            try:
+                result[fp.name] = fp.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"[Loader] Failed to read {fp}: {e}")
+
+    logger.info(f"[Loader] Loaded {len(result)} files from: {resolved}")
+    return result
+
+
 def _load_source_from_disk(project_name: str, language: str) -> dict[str, str]:
-    """Load source files from generated/src/{project}/{language}/ directory."""
+    """Load source files from generated/src/ directory."""
     from pathlib import Path
     settings = get_settings()
-    base = Path(settings.uml_dir).resolve().parent.parent / "generated" / "src"
-    # Sanitize project name
-    safe_name = "".join(c for c in project_name if c.isalnum() or c in "._- ").strip() or "project"
-    src_dir = base / safe_name / language
-    if not src_dir.exists():
-        return {}
-    result = {}
-    for fp in src_dir.iterdir():
-        if fp.is_file() and fp.suffix in (".py", ".ts", ".js", ".java", ".go", ".rs", ".rb", ".swift", ".kt", ".php", ".cs", ".cpp", ".h", ".hpp"):
-            result[fp.name] = fp.read_text(encoding="utf-8")
-    return result
+    src_dir = Path(settings.uml_dir).resolve().parent.parent / "generated" / "src"
+    return _load_files_from_directory(str(src_dir), language)
 
 
 def _build_per_file_stats(test_results: str) -> list[dict]:
@@ -948,38 +1054,70 @@ async def _update_stage(
     }
 
 
-async def _execute_tests(test_files: dict[str, str], language: str, project_name: str = "Untitled") -> str:
-    """Execute tests using real pytest subprocess. Falls back to LLM simulation if pytest unavailable."""
+async def _execute_tests(
+    test_files: dict[str, str],
+    language: str,
+    project_name: str = "Untitled",
+    source_dir: str = "",
+    test_dir: str = "",
+) -> str:
+    """Execute tests using real pytest subprocess. Falls back to LLM simulation if pytest unavailable.
+
+    If source_dir / test_dir are provided, use them instead of the auto-generated paths.
+    """
     import sys
     import asyncio as _asyncio
     from pathlib import Path
 
     settings = get_settings()
     base_dir = Path(settings.uml_dir).resolve().parent.parent
-    src_dir = base_dir / "generated" / "src" / project_name / language
-    test_dir = base_dir / "generated" / "test" / project_name / language
+    src_dir = Path(source_dir) if source_dir else base_dir / "generated" / "src"
+    test_dir_path = Path(test_dir) if test_dir else base_dir / "generated" / "test"
 
     logger.info(f"[TestExec] ========== Running real pytest ==========")
     logger.info(f"[TestExec] Project: {project_name} | Language: {language}")
     logger.info(f"[TestExec] Source dir: {src_dir}")
-    logger.info(f"[TestExec] Test dir:   {test_dir}")
-    logger.info(f"[TestExec] Files on disk: test_dir exists={test_dir.exists()}, src_dir exists={src_dir.exists()}")
+    logger.info(f"[TestExec] Test dir:   {test_dir_path}")
+    logger.info(f"[TestExec] Files on disk: test_dir exists={test_dir_path.exists()}, src_dir exists={src_dir.exists()}")
 
     # List actual files on disk for debugging
-    if test_dir.exists():
-        disk_files = list(test_dir.iterdir())
+    if test_dir_path.exists():
+        disk_files = list(test_dir_path.iterdir())
         logger.info(f"[TestExec] Test files on disk: {[f.name for f in disk_files if f.is_file()]}")
     if src_dir.exists():
         disk_src = list(src_dir.iterdir())
         logger.info(f"[TestExec] Source files on disk: {[f.name for f in disk_src if f.is_file()]}")
 
-    if not test_dir.exists() or not any(test_dir.iterdir()):
-        logger.error(f"[TestExec] Test directory empty or missing: {test_dir}")
+    if not test_dir_path.exists() or not any(test_dir_path.iterdir()):
+        logger.error(f"[TestExec] Test directory empty or missing: {test_dir_path}")
         return "Error: No test files found on disk. Test generation may have failed."
+
+    # Clear __pycache__ to avoid stale import-file-mismatch errors
+    # (happens when test files move between directories, e.g. generated/test/Untitled/python/ → generated/test/)
+    import shutil as _shutil
+    for _root, _dirs, _files in os.walk(str(test_dir_path)):
+        for _d in _dirs:
+            if _d == "__pycache__":
+                _cache = os.path.join(_root, _d)
+                try:
+                    _shutil.rmtree(_cache)
+                    logger.info(f"[TestExec] Cleared pycache: {_cache}")
+                except Exception:
+                    pass
+    # Also clear pycache from source directory
+    if src_dir.exists():
+        for _root, _dirs, _files in os.walk(str(src_dir)):
+            for _d in _dirs:
+                if _d == "__pycache__":
+                    _cache = os.path.join(_root, _d)
+                    try:
+                        _shutil.rmtree(_cache)
+                    except Exception:
+                        pass
 
     # Build environment with PYTHONPATH including both src and test dirs
     env = os.environ.copy()
-    pythonpath_parts = [str(src_dir), str(test_dir)]
+    pythonpath_parts = [str(src_dir), str(test_dir_path)]
     if "PYTHONPATH" in env:
         pythonpath_parts.insert(0, env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
@@ -987,7 +1125,7 @@ async def _execute_tests(test_files: dict[str, str], language: str, project_name
     # Build pytest command: verbose, short traceback, timeout per test
     cmd = [
         sys.executable, "-m", "pytest",
-        str(test_dir),
+        str(test_dir_path),
         "-v",                    # verbose: shows each test name
         "--tb=short",            # short traceback for failures
         "--timeout=30",          # 30s timeout per test
@@ -1178,6 +1316,8 @@ async def resume_pipeline(
     auto_confirm: bool = True,
     skip_case_review: bool = False,
     skip_code_gen: bool = False,
+    source_dir: str = "",
+    test_dir: str = "",
 ) -> AsyncIterator[dict]:
     """Resume pipeline from the dev_confirm stage or after case review."""
     pipeline = _pipelines.get(pipeline_id)
@@ -1189,12 +1329,15 @@ async def resume_pipeline(
 
     need_code_gen = not skip_code_gen
     if skip_code_gen:
-        # Reuse existing source code from artifacts, fallback to disk
-        current_code = {a.filename: a.content for a in pipeline.code_artifacts if a.version == 1}
+        # Reuse existing source code: user dir → artifacts → generated/ disk
+        if source_dir:
+            current_code = _load_files_from_directory(source_dir, language)
+        if not current_code:
+            current_code = {a.filename: a.content for a in pipeline.code_artifacts if a.version == 1}
         if not current_code:
             current_code = _load_source_from_disk(diagram.name, language)
         if current_code:
-            logger.info(f"[Pipeline] Loaded {len(current_code)} cached source files: {list(current_code.keys())}")
+            logger.info(f"[Pipeline] Loaded {len(current_code)} cached source files from: {source_dir or 'artifacts/disk'}: {list(current_code.keys())}")
             yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS, "Using cached code")
         else:
             logger.warning("[Pipeline] No cached source code found, regenerating...")
@@ -1207,20 +1350,41 @@ async def resume_pipeline(
         optimized_diagram = UmlDiagram(**optimized_data) if optimized_data else diagram
 
         # --- Stage 3: Code Gen ---
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
-        try:
-            current_code = await generate_code(optimized_diagram, language)
-            for fname, content in current_code.items():
-                pipeline.code_artifacts.append(CodeArtifact(
-                    language=language, filename=fname, content=content,
-                ))
-            pipeline.stages[2].result = {"files": list(current_code.keys())}
-            _save_generated_files(diagram.name, language, current_code)
-            pipeline.stages[2].logs = f"Saved: generated/src/{diagram.name}/{language}/"
-            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
-        except Exception as e:
-            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
+        if source_dir:
+            existing_code = _load_files_from_directory(source_dir, language)
+            if existing_code:
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING,
+                                           f"Adapting {len(existing_code)} existing source files to UML...")
+                try:
+                    current_code = await adapt_code_to_uml(existing_code, optimized_diagram, language)
+                except Exception as e:
+                    yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
+                    return
+            else:
+                existing_code = None
+
+        if not current_code:
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+            try:
+                current_code = await generate_code(optimized_diagram, language)
+            except Exception as e:
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
+                return
+
+        if not current_code:
+            logger.error("[Pipeline Stage 3] Code generation returned empty")
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
+                                       "Code generation failed: LLM returned no valid code files")
             return
+
+        for fname, content in current_code.items():
+            pipeline.code_artifacts.append(CodeArtifact(
+                language=language, filename=fname, content=content,
+            ))
+        pipeline.stages[2].result = {"files": list(current_code.keys())}
+        _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
+        pipeline.stages[2].logs = f"Saved to: {source_dir or f'generated/src/{diagram.name}/{language}/'}"
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
 
     # --- Stage 4: Case Review ---
     if skip_case_review:
@@ -1237,29 +1401,55 @@ async def resume_pipeline(
         return  # Wait for confirm via WebSocket, then resume
 
     # --- Stage 5: Test Gen ---
-    yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
-    try:
-        test_cases_data = (pipeline.stages[3].result or {}).get("test_cases", "") if pipeline.stages[3].result else ""
-        logger.info(f"[Pipeline Stage 5] test_cases_data present: {bool(test_cases_data)}, length: {len(test_cases_data) if test_cases_data else 0}")
-        test_files = await generate_tests(current_code, language, test_cases_data)
-        if not test_files:
-            logger.error("[Pipeline Stage 5] generate_tests returned empty — LLM JSON parse likely failed")
-            yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED,
-                                       "Test generation failed: LLM returned no valid test files")
+    # If test_dir provided and has files → incrementally update based on case review
+    # Otherwise → generate from scratch (existing behavior)
+    test_cases_data = (pipeline.stages[3].result or {}).get("test_cases", "") if pipeline.stages[3].result else ""
+    logger.info(f"[Pipeline Stage 5] test_cases_data present: {bool(test_cases_data)}, length: {len(test_cases_data) if test_cases_data else 0}")
+
+    if test_dir:
+        existing_tests = _load_files_from_directory(test_dir, language)
+        if existing_tests:
+            yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING,
+                                       f"Incrementally updating {len(existing_tests)} existing test files...")
+            try:
+                test_files = await update_tests_incremental(existing_tests, current_code, language, test_cases_data)
+                if not test_files:
+                    logger.warning("[Pipeline Stage 5] update_tests_incremental returned empty, falling back to full generation")
+                else:
+                    for fname, content in test_files.items():
+                        pipeline.code_artifacts.append(CodeArtifact(
+                            language=language, filename=fname, content=content, version=2,
+                        ))
+                    pipeline.stages[4].result = {"test_files": list(test_files.keys())}
+                    _save_generated_files(diagram.name, language, {}, test_files, target_test_dir=test_dir)
+                    pipeline.stages[4].logs = f"Updated {len(existing_tests)} existing test files from: {test_dir}"
+                    yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
+            except Exception as e:
+                logger.warning(f"[Pipeline Stage 5] Incremental update failed: {e}, falling back to full generation")
+
+    if not test_files:
+        yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
+        try:
+            test_files = await generate_tests(current_code, language, test_cases_data)
+            if not test_files:
+                logger.error("[Pipeline Stage 5] generate_tests returned empty — LLM JSON parse likely failed")
+                yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED,
+                                           "Test generation failed: LLM returned no valid test files")
+                return
+            for fname, content in test_files.items():
+                pipeline.code_artifacts.append(CodeArtifact(
+                    language=language, filename=fname, content=content, version=2,
+                ))
+            pipeline.stages[4].result = {"test_files": list(test_files.keys())}
+            _save_generated_files(diagram.name, language, {}, test_files, target_test_dir=test_dir)
+            pipeline.stages[4].logs = f"Generated: {'saved to ' + test_dir if test_dir else 'generated/test/' + diagram.name + '/' + language + '/'}"
+            yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
+        except Exception as e:
+            yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))
             return
-        for fname, content in test_files.items():
-            pipeline.code_artifacts.append(CodeArtifact(
-                language=language, filename=fname, content=content, version=2,
-            ))
-        pipeline.stages[4].result = {"test_files": list(test_files.keys())}
-        _save_generated_files(diagram.name, language, {}, test_files)
-        pipeline.stages[4].logs = f"Saved: generated/test/{diagram.name}/{language}/"
-        yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
-    except Exception as e:
-        yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))
-        return
 
     # --- Stage 6 + Stage 7: Test exec + code optimize ---
-    async for event in _run_test_and_optimize(pipeline, diagram, language, current_code, test_files):
+    async for event in _run_test_and_optimize(pipeline, diagram, language, current_code, test_files,
+                                               source_dir=source_dir, test_dir=test_dir):
         yield event
     return

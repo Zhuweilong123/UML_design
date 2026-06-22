@@ -93,6 +93,8 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
     diagram = UmlDiagram(**msg.get("diagram", {}))
     language = msg.get("language", "python")
     auto_confirm = msg.get("auto_confirm", False)
+    source_dir = msg.get("source_dir", "")
+    test_dir = msg.get("test_dir", "")
 
     state = get_pipeline(pipeline_id) or create_pipeline(pipeline_id, diagram)
 
@@ -118,7 +120,8 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                         msg.get("comment", ""),
                     )
                     async for resume_event in resume_pipeline(
-                        pipeline_id, diagram, language, auto_confirm=True
+                        pipeline_id, diagram, language, auto_confirm=True,
+                        source_dir=source_dir, test_dir=test_dir,
                     ):
                         if _is_stopped(pipeline_id):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
@@ -138,7 +141,11 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                         test_cases_data = msg.get("test_cases", "")
                         pipeline.stages[3].result = {"test_cases": test_cases_data}
                         await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
-                    async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
+                    async for resume_event in resume_pipeline(
+                        pipeline_id, diagram, language, auto_confirm=True,
+                        skip_case_review=True, skip_code_gen=True,
+                        source_dir=source_dir, test_dir=test_dir,
+                    ):
                         if _is_stopped(pipeline_id):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                             return
@@ -166,7 +173,8 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                 elif msg.get("action") == "submit_instructions":
                     instructions = msg.get("instructions", "")
                     async for resume_event in resume_with_instructions(
-                        pipeline_id, diagram, instructions, language
+                        pipeline_id, diagram, instructions, language,
+                        source_dir=source_dir, test_dir=test_dir,
                     ):
                         if _is_stopped(pipeline_id):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
@@ -183,7 +191,10 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                         await ws.send_json(yield_event)
                         yield_event = await _update_stage(pipeline, StageName.DEV_CONFIRM, StageStatus.SUCCESS, "Auto-confirmed (skipped optimization)")
                         await ws.send_json(yield_event)
-                        async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True):
+                        async for resume_event in resume_pipeline(
+                            pipeline_id, diagram, language, auto_confirm=True,
+                            source_dir=source_dir, test_dir=test_dir,
+                        ):
                             if _is_stopped(pipeline_id):
                                 await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                                 return False
@@ -220,7 +231,11 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                         logger.info(f"[Pipeline] Stored test_cases in stages[3].result: {len(tc)} chars")
                         await ws.send_json(await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.SUCCESS, "User confirmed"))
                     # Resume from Stage 5 (Test Gen), skip case review
-                    async for resume_event in resume_pipeline(pipeline_id, diagram, language, auto_confirm=True, skip_case_review=True, skip_code_gen=True):
+                    async for resume_event in resume_pipeline(
+                        pipeline_id, diagram, language, auto_confirm=True,
+                        skip_case_review=True, skip_code_gen=True,
+                        source_dir=source_dir, test_dir=test_dir,
+                    ):
                         if _is_stopped(pipeline_id):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                             return
@@ -230,7 +245,10 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
             pass
 
     try:
-        async for event in run_pipeline(pipeline_id, diagram, language, auto_confirm):
+        async for event in run_pipeline(
+            pipeline_id, diagram, language, auto_confirm,
+            source_dir=source_dir, test_dir=test_dir,
+        ):
             if stop_requested or _is_stopped(pipeline_id):
                 await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
                 break

@@ -1,0 +1,69 @@
+"""Shared security utilities — path safety, input sanitization."""
+
+import os
+import re
+from fastapi import HTTPException
+
+from app.core.config import get_settings
+
+
+def sanitize_path_segment(segment: str) -> str:
+    """Remove dangerous characters from a single path component.
+
+    Returns an empty string if the segment is unsafe.
+    """
+    if not segment:
+        return ""
+    # Strip directory traversal sequences
+    cleaned = segment.replace("\\", "/").replace("..", "").lstrip("/")
+    # Keep only alphanumeric, dash, underscore, dot
+    cleaned = re.sub(r"[^\w\-.]", "_", cleaned)
+    return cleaned.strip("_") or ""
+
+
+def resolve_path(user_path: str) -> str:
+    """Normalise an absolute or relative path WITHOUT restricting it to the
+    project root.  Returns the real absolute path with symlinks resolved.
+
+    Raises HTTPException(400) on malformed paths.
+    """
+    if not user_path:
+        raise HTTPException(status_code=400, detail="Empty path")
+
+    try:
+        candidate = os.path.abspath(user_path)
+        return os.path.realpath(candidate)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+
+def safe_path(user_path: str) -> str:
+    """Resolve a user-supplied path and ensure it stays within the project root.
+
+    Raises HTTPException(403) on directory traversal attempt.
+    """
+    settings = get_settings()
+    # Resolve the project root (parent of backend/)
+    project_root = os.path.abspath(os.path.join(settings.uml_dir, "..", ".."))
+
+    if not user_path:
+        return os.path.abspath(settings.uml_dir)
+
+    # If relative, anchor it to the project root
+    if not os.path.isabs(user_path):
+        candidate = os.path.abspath(os.path.join(project_root, user_path))
+    else:
+        candidate = os.path.abspath(user_path)
+
+    # Resolve symlinks to defeat symlink-based escapes
+    try:
+        real_candidate = os.path.realpath(candidate)
+        real_root = os.path.realpath(project_root)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    # Must be within the project root
+    if os.path.commonpath([real_candidate, real_root]) != real_root:
+        raise HTTPException(status_code=403, detail="Access denied: path outside project")
+
+    return real_candidate

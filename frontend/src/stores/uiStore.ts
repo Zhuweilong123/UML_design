@@ -37,6 +37,8 @@ interface UiState {
 
   // Pipeline
   activePipelineId: string | null;
+  pipelineSourceDir: string;
+  pipelineTestDir: string;
 
   // Modal
   fileDialogVisible: boolean;
@@ -67,6 +69,8 @@ interface UiState {
   setTestCaseData: (data: string) => void;
 
   setActivePipelineId: (id: string | null) => void;
+  setPipelineSourceDir: (dir: string) => void;
+  setPipelineTestDir: (dir: string) => void;
 
   setFileDialogVisible: (visible: boolean) => void;
   setExportDialogVisible: (visible: boolean) => void;
@@ -93,6 +97,8 @@ export const useUiStore = create<UiState>((set) => ({
   showTestCaseInCanvas: false,
   testCaseData: '',
   activePipelineId: null,
+  pipelineSourceDir: localStorage.getItem('pipelineSourceDir') || '',
+  pipelineTestDir: localStorage.getItem('pipelineTestDir') || '',
   fileDialogVisible: false,
   exportDialogVisible: false,
   codeGenLoading: false,
@@ -133,6 +139,14 @@ export const useUiStore = create<UiState>((set) => ({
   setTestCaseData: (data) => set({ testCaseData: data }),
 
   setActivePipelineId: (id) => set({ activePipelineId: id }),
+  setPipelineSourceDir: (dir) => {
+    localStorage.setItem('pipelineSourceDir', dir);
+    set({ pipelineSourceDir: dir });
+  },
+  setPipelineTestDir: (dir) => {
+    localStorage.setItem('pipelineTestDir', dir);
+    set({ pipelineTestDir: dir });
+  },
 
   setFileDialogVisible: (visible) => set({ fileDialogVisible: visible }),
   setExportDialogVisible: (visible) => set({ exportDialogVisible: visible }),

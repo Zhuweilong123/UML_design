@@ -128,13 +128,19 @@ export function createPipelineWs(
   diagram: UmlDiagram,
   language = 'python',
   autoConfirm = false,
+  sourceDir = '',
+  testDir = '',
 ): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const tokenParam = API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : '';
   const wsUrl = `${protocol}//${window.location.host}/api/pipeline/ws/${pipelineId}${tokenParam}`;
   const ws = new WebSocket(wsUrl);
   ws.onopen = () => {
-    ws.send(JSON.stringify({ diagram, language, auto_confirm: autoConfirm }));
+    ws.send(JSON.stringify({
+      diagram, language, auto_confirm: autoConfirm,
+      source_dir: sourceDir,
+      test_dir: testDir,
+    }));
   };
   return ws;
 }
@@ -150,9 +156,12 @@ export interface BrowseResult {
   }>;
 }
 
-export async function browseDirectory(path?: string): Promise<BrowseResult> {
-  const params = path ? `?path=${encodeURIComponent(path)}` : '';
-  const { data } = await api.get(`/files/browse${params}`);
+export async function browseDirectory(path?: string, safe = true): Promise<BrowseResult> {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (!safe) params.set('safe', 'false');
+  const qs = params.toString();
+  const { data } = await api.get(`/files/browse${qs ? '?' + qs : ''}`);
   return data;
 }
 

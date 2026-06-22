@@ -11,15 +11,38 @@ from typing import Any, Callable
 
 
 def clean_llm_json_response(response: str) -> str:
-    """Strip markdown code fences from LLM JSON responses."""
-    cleaned = response.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        lines = lines[1:] if lines[0].startswith("```") else lines
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines)
-    return cleaned
+    """Extract valid JSON from an LLM response that may contain markdown fences,
+    explanatory text, or other noise before/after the JSON object.
+
+    Tries multiple strategies in order; returns the cleaned JSON string or the
+    original response if no JSON block can be identified.
+    """
+    import re
+    text = response.strip()
+
+    # Strategy 1: ```json ... ``` fenced block
+    m = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # Strategy 2: ``` ... ``` any fenced block
+    m = re.search(r'```\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # Strategy 3: extract outermost { ... } pair
+    first_brace = text.find('{')
+    if first_brace >= 0:
+        depth = 0
+        for i in range(first_brace, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[first_brace:i + 1]
+
+    return response.strip()
 
 
 @dataclass

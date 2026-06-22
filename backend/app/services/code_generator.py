@@ -239,6 +239,7 @@ async def generate_tests(
         system_prompt=f"You are an expert {language} test engineer. Output only valid JSON.",
         temperature=0.3,
         max_tokens=8192,
+        json_mode=True,
     )
     try:
         cleaned = clean_llm_json_response(response)
@@ -409,6 +410,133 @@ async def fix_code(
         return json.loads(cleaned)
     except json.JSONDecodeError:
         return {f"fixed_{k}": v for k, v in code_files.items()}
+
+
+async def adapt_code_to_uml(
+    existing_code: dict[str, str],
+    diagram: UmlDiagram,
+    language: str,
+) -> dict[str, str]:
+    """Adapt existing source code to match current UML diagram.
+
+    Keeps existing business logic when UML is unchanged; adds/removes/changes
+    classes, attributes, and methods based on UML diffs.
+    """
+    existing_text = "\n\n".join(
+        f"### {fname}\n```{language}\n{content}\n```"
+        for fname, content in existing_code.items()
+    )
+
+    prompt = f"""You are modifying existing {language} source code to match an updated UML class diagram.
+
+## Current UML Design (authoritative — code must match this):
+```json
+{diagram.model_dump_json(indent=2)}
+```
+
+## Existing Source Code (adapt this to match the UML above):
+{existing_text[:8000]}
+
+## Rules for adaptation:
+1. **UML ↔ Code consistency is the goal.** For each class in the UML, there must be a matching implementation.
+2. **Preserve existing business logic** — if the UML class/attribute/method hasn't changed from the code, keep the existing implementation details (comments, algorithm choices, error handling).
+3. **UML has a class that code doesn't** → create a new file with stub implementation, keeping the UML's stereotype and business rules from notes.
+4. **Code has a class that UML doesn't** → remove that class/file.
+5. **UML class has new attributes/methods** → add them to the existing class implementation.
+6. **UML class removed attributes/methods** → remove them from the existing class.
+7. Follow {language} best practices and conventions.
+8. Return the COMPLETE modified source files as a JSON object mapping filenames to content.
+9. Only output the JSON object, no other text.
+
+```json
+{{"file1.py": "full modified content...", "file2.py": "full modified content..."}}
+```"""
+
+    response = await chat(
+        prompt=prompt,
+        system_prompt=f"You are an expert {language} developer adapting code to a UML design. Output only valid JSON.",
+        temperature=0.3,
+        max_tokens=8192,
+        json_mode=True,
+    )
+    try:
+        cleaned = clean_llm_json_response(response)
+        fixed = json.loads(cleaned)
+        if isinstance(fixed, dict) and fixed:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.info(f"[adapt_code] LLM returned {len(fixed)} modified source files: {list(fixed.keys())}")
+            return fixed
+        return existing_code
+    except json.JSONDecodeError:
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(f"[adapt_code] JSON parse failed, keeping existing code")
+        return existing_code
+
+
+async def update_tests_incremental(
+    existing_tests: dict[str, str],
+    source_code: dict[str, str],
+    language: str,
+    changed_cases: str,
+) -> dict[str, str]:
+    """Incrementally update existing test files based on changed test cases.
+
+    Preserves unchanged test functions; adds/updates/removes based on
+    the changed cases summary from Stage 4 (case review).
+    """
+    test_text = "\n\n".join(
+        f"### {fname}\n```{language}\n{content}\n```"
+        for fname, content in existing_tests.items()
+    )
+    api_sigs = _extract_api_signatures(source_code, language)
+
+    prompt = f"""You are incrementally updating existing {language} test code.
+
+## Current Source API (tests MUST match these exact signatures):
+{api_sigs}
+
+## Changed Test Cases (from case review — only these need attention):
+{changed_cases[:6000] if changed_cases else "(no specific changes — keep all existing tests as-is)"}
+
+## Existing Test Code (incrementally update based on changed cases above):
+{test_text[:8000]}
+
+## Rules for incremental update:
+1. **For test functions matching unchanged case IDs** → keep them exactly as-is.
+2. **For test functions matching changed case IDs** → update the test body to match the new test steps and expected results.
+3. **New case IDs that have no existing test function** → add a new test function following the naming pattern: `test_<CASE_ID>_<short_description>`.
+4. **Test functions whose case IDs were deleted from the case sheet** → remove them.
+5. Keep all imports, fixtures, and test utilities unchanged unless they contradict new requirements.
+6. Return the COMPLETE modified test files as a JSON object mapping filenames to content.
+7. Only output the JSON object, no other text.
+
+```json
+{{"test_module1.py": "full modified content...", "test_module2.py": "full modified content..."}}
+```"""
+
+    response = await chat(
+        prompt=prompt,
+        system_prompt=f"You are an expert {language} test engineer. Update test files incrementally. Output only valid JSON.",
+        temperature=0.3,
+        max_tokens=8192,
+        json_mode=True,
+    )
+    try:
+        cleaned = clean_llm_json_response(response)
+        fixed = json.loads(cleaned)
+        if isinstance(fixed, dict) and fixed:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.info(f"[update_tests] LLM returned {len(fixed)} modified test files: {list(fixed.keys())}")
+            return fixed
+        return existing_tests
+    except json.JSONDecodeError:
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(f"[update_tests] JSON parse failed, keeping existing tests")
+        return existing_tests
 
 
 def _get_extension(language: str) -> str:
