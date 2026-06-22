@@ -950,7 +950,6 @@ async def _update_stage(
 
 async def _execute_tests(test_files: dict[str, str], language: str, project_name: str = "Untitled") -> str:
     """Execute tests using real pytest subprocess. Falls back to LLM simulation if pytest unavailable."""
-    import subprocess
     import sys
     import asyncio as _asyncio
     from pathlib import Path
@@ -999,21 +998,23 @@ async def _execute_tests(test_files: dict[str, str], language: str, project_name
     logger.info(f"[TestExec] PYTHONPATH: {env['PYTHONPATH']}")
 
     try:
-        proc = await _asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=_asyncio.subprocess.PIPE,
-            stderr=_asyncio.subprocess.PIPE,
+        # Use asyncio.to_thread + subprocess.run to avoid Windows
+        # asyncio.create_subprocess_exec NotImplementedError.
+        import subprocess as _sp
+        result = await _asyncio.to_thread(
+            _sp.run,
+            cmd,
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
             env=env,
             cwd=str(base_dir),
-        )
-        stdout_bytes, stderr_bytes = await _asyncio.wait_for(
-            proc.communicate(), timeout=120
+            timeout=120,
         )
 
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        stderr = result.stderr.decode("utf-8", errors="replace")
 
-        logger.info(f"[TestExec] pytest exit code: {proc.returncode}")
+        logger.info(f"[TestExec] pytest exit code: {result.returncode}")
         logger.info(f"[TestExec] pytest stdout ({len(stdout)} chars)")
 
         # Debug: show first 3 test lines to verify parse format
@@ -1038,12 +1039,16 @@ async def _execute_tests(test_files: dict[str, str], language: str, project_name
     except _asyncio.TimeoutError:
         logger.error("[TestExec] pytest timed out after 120s, falling back to LLM simulation")
     except FileNotFoundError:
-        logger.error("[TestExec] pytest executable not found, falling back to LLM simulation")
+        logger.error("[TestExec] pytest not found, falling back to LLM simulation")
+    except NotImplementedError:
+        logger.error("[TestExec] asyncio subprocess not supported on this platform, falling back to LLM simulation")
     except Exception as e:
         logger.exception(f"[TestExec] pytest execution failed: {e}, falling back to LLM simulation")
 
     # ── LLM simulation fallback ──
-    logger.info("[TestExec] Running LLM simulation fallback...")
+    logger.warning("[TestExec] ========== LLM SIMULATION MODE (not real pytest!) ==========")
+    logger.warning("[TestExec] Results below are LLM PREDICTIONS, not actual code execution")
+
     test_code = "\n\n".join(
         f"### {fname}\n```\n{content}\n```"
         for fname, content in test_files.items()
@@ -1062,7 +1067,10 @@ Test: test_name_2 -> FAIL (reason)
 Summary: X passed, Y failed
 ```
 """
-    return await chat(prompt, system_prompt="You are a test execution simulator.", temperature=0.3)
+    result = await chat(prompt, system_prompt="You are a test execution simulator.", temperature=0.3)
+    logger.warning(f"[TestExec] LLM simulation result: {result[:300]}")
+    logger.warning("[TestExec] ========== LLM simulation done ==========")
+    return result
 
 
 def _parse_pytest_output(stdout: str, stderr: str) -> str:

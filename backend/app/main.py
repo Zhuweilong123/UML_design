@@ -16,10 +16,11 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
+from app.core.auth import require_auth
 from app.api.files import router as files_router
 from app.api.llm import router as llm_router
 from app.api.pipeline import router as pipeline_router
@@ -44,11 +45,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
+# Include routers — auth is required on LLM & pipeline endpoints
 app.include_router(files_router)
-app.include_router(llm_router)
-app.include_router(pipeline_router)
-app.include_router(testhub_router)
+app.include_router(llm_router, dependencies=[Depends(require_auth)])
+app.include_router(pipeline_router)  # auth: WS endpoint checks token manually; HTTP routes use Depends
+app.include_router(testhub_router, dependencies=[Depends(require_auth)])
 
 # Static files (uploaded files)
 os.makedirs(settings.upload_dir, exist_ok=True)

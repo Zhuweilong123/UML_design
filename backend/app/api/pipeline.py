@@ -1,10 +1,13 @@
 """Pipeline API – manage and run the 7-stage automation pipeline."""
 
 import asyncio
+import hmac
 import json
 import logging
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
+from app.core.auth import require_auth
+from app.core.config import get_settings
 from app.models.uml import UmlDiagram
 from app.models.pipeline import (
     ConfirmRequest, PipelineState,
@@ -29,14 +32,14 @@ class CreatePipelineBody(BaseModel):
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 
-@router.post("/create")
+@router.post("/create", dependencies=[Depends(require_auth)])
 async def create_pipeline_endpoint(body: CreatePipelineBody):
     """Create a new pipeline for a diagram."""
     state = create_pipeline(body.diagram_id, body.diagram)
     return {"pipeline": state.model_dump()}
 
 
-@router.get("/{pipeline_id}")
+@router.get("/{pipeline_id}", dependencies=[Depends(require_auth)])
 async def get_pipeline_endpoint(pipeline_id: str):
     """Get pipeline state."""
     state = get_pipeline(pipeline_id)
@@ -45,14 +48,14 @@ async def get_pipeline_endpoint(pipeline_id: str):
     return {"pipeline": state.model_dump()}
 
 
-@router.post("/{pipeline_id}/confirm")
+@router.post("/{pipeline_id}/confirm", dependencies=[Depends(require_auth)])
 async def confirm_stage_endpoint(pipeline_id: str, req: ConfirmRequest):
     """Confirm or reject a pipeline stage."""
     state = confirm_stage(pipeline_id, req.stage, req.accepted, req.comment)
     return {"pipeline": state.model_dump()}
 
 
-@router.post("/{pipeline_id}/resume")
+@router.post("/{pipeline_id}/resume", dependencies=[Depends(require_auth)])
 async def resume_pipeline_endpoint(
     pipeline_id: str,
     diagram: UmlDiagram,
@@ -70,8 +73,18 @@ async def resume_pipeline_endpoint(
 
 
 @router.websocket("/ws/{pipeline_id}")
-async def pipeline_websocket(ws: WebSocket, pipeline_id: str):
-    """WebSocket endpoint for real-time pipeline progress."""
+async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
+    """WebSocket endpoint for real-time pipeline progress.
+
+    When internal_api_token is configured, the client must pass
+    ?token=<value> as a query parameter.
+    """
+    settings = get_settings()
+    if settings.internal_api_token:
+        if not token or not hmac.compare_digest(token, settings.internal_api_token):
+            await ws.close(code=4001, reason="Unauthorized")
+            return
+
     await ws.accept()
 
     # Read diagram from the first message

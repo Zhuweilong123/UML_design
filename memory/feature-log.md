@@ -216,5 +216,42 @@ metadata:
 | F18 | JSON Mode 强制结构化输出 | AI |
 | F19 | ReAct 上下文自动保存 | 日志 |
 | F20 | 流水线优化逐轮详情 | 日志 |
+| F21 | API 鉴权 (Bearer Token) | 安全 |
+| F22 | 路径安全校验 | 安全 |
+| F23 | 真实 pytest 线程执行 | 测试 |
 
-**总计: 20 项功能迭代**
+**总计: 23 项功能迭代**
+
+---
+
+## F21 - API 鉴权（Bearer Token 可配置）
+
+- **描述**:
+  - 后端新增 `require_auth` 依赖，从 `Authorization: Bearer <token>` 读取令牌
+  - 与 `.env` 中的 `INTERNAL_API_TOKEN` 对比，匹配放行，不匹配返回 403
+  - Token 未配置时自动跳过（本地开发兼容）
+  - LLM、Pipeline、TestHub、Files 写端点全部受保护
+  - 前端 `VITE_API_TOKEN` 环境变量驱动 axios 全局 header + WebSocket query param
+- **关键文件**: `backend/app/core/auth.py`, `backend/app/main.py`, `frontend/src/services/api.ts`
+
+---
+
+## F22 - 路径安全校验（防目录遍历）
+
+- **描述**:
+  - `_safe_path()` 函数：解析用户路径 → 解析符号链接 → 与项目根做 `commonpath` 前缀检查
+  - `open_file`: 限制只能打开 `.uml` 文件且路径在项目内
+  - `browse_directory`: 父目录导航也受限在项目内
+  - `upload_excel/save_file/save_generated_code`: 文件名/项目名/语言名净化
+- **关键文件**: `backend/app/api/files.py`
+
+---
+
+## F23 - 真实 pytest 线程执行（替代 asyncio 子进程）
+
+- **描述**:
+  - Windows 上 `asyncio.create_subprocess_exec` 抛 `NotImplementedError`
+  - 改用 `asyncio.to_thread()` + 同步 `subprocess.run()` 在线程池中执行 pytest
+  - 日志明确标注 `LLM SIMULATION MODE` vs `Running real pytest`
+  - 同时捕获 `NotImplementedError` 作为额外回退保护
+- **关键文件**: `backend/app/services/pipeline_service.py`

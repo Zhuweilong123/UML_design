@@ -1,9 +1,10 @@
 """File operations API – new, open, save, export, browse, review."""
 
 import os
+import re
 from datetime import datetime
 from pydantic import BaseModel
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
 
 from app.models.uml import UmlDiagram, ExportRequest
@@ -11,6 +12,7 @@ from app.services.file_service import (
     save_diagram, load_diagram, list_diagrams, export_markdown,
 )
 from app.core.config import get_settings
+from app.core.auth import require_auth
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -21,25 +23,33 @@ async def list_files():
     return {"files": list_diagrams()}
 
 
-@router.post("/save")
+@router.post("/save", dependencies=[Depends(require_auth)])
 async def save_file(diagram: UmlDiagram, filename: str = ""):
     """Save a UML diagram to a .uml file. Optional custom filename."""
     filepath = None
     if filename:
-        # Ensure .uml extension
-        if not filename.endswith(".uml"):
-            filename += ".uml"
-        filepath = os.path.join(get_settings().uml_dir, filename)
+        # Sanitize filename — strip path and dangerous chars
+        safe_name = _sanitize_path_segment(filename.replace(".uml", ""))
+        if safe_name:
+            safe_name += ".uml"
+            filepath = os.path.join(get_settings().uml_dir, safe_name)
     filepath = save_diagram(diagram, filepath)
     return {"success": True, "filepath": filepath, "filename": os.path.basename(filepath)}
 
 
 @router.get("/open")
 async def open_file(filepath: str):
-    """Open a saved UML diagram file."""
-    if not os.path.exists(filepath):
+    """Open a saved UML diagram file. Only allows .uml files within the project."""
+    # Validate path stays within project
+    try:
+        safe = _safe_path(filepath)
+    except HTTPException:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not safe.endswith(".uml"):
+        raise HTTPException(status_code=400, detail="Only .uml files can be opened")
+    if not os.path.exists(safe):
         raise HTTPException(status_code=404, detail="File not found")
-    diagram = load_diagram(filepath)
+    diagram = load_diagram(safe)
     return {"diagram": diagram.model_dump()}
 
 
@@ -57,16 +67,22 @@ async def export_to_markdown(req: ExportRequest):
     return md
 
 
-@router.post("/upload/excel")
+@router.post("/upload/excel", dependencies=[Depends(require_auth)])
 async def upload_excel(file: UploadFile = File(...)):
     """Upload an Excel test case file."""
     import pandas as pd
     content = await file.read()
 
+    # Sanitize filename — strip path components to prevent traversal
+    raw_name = file.filename or "testCase.xlsx"
+    safe_name = os.path.basename(raw_name)
+    if not safe_name or safe_name.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     # Save uploaded file
     settings = get_settings()
     os.makedirs(settings.upload_dir, exist_ok=True)
-    filepath = os.path.join(settings.upload_dir, file.filename or "testCase.xlsx")
+    filepath = os.path.join(settings.upload_dir, safe_name)
     with open(filepath, "wb") as f:
         f.write(content)
 
@@ -80,16 +96,68 @@ async def upload_excel(file: UploadFile = File(...)):
     return {"filename": file.filename, "sheets": sheets, "sheet_names": xls.sheet_names}
 
 
+# ── Path safety helpers ───────────────────────────────────
+
+def _sanitize_path_segment(segment: str) -> str:
+    """Remove dangerous characters from a single path component.
+
+    Returns an empty string if the segment is unsafe."""
+    if not segment:
+        return ""
+    # Strip directory traversal sequences
+    cleaned = segment.replace("\\", "/").replace("..", "").lstrip("/")
+    # Keep only alphanumeric, dash, underscore, dot
+    cleaned = re.sub(r"[^\w\-.]", "_", cleaned)
+    return cleaned.strip("_") or ""
+
+
+def _safe_path(user_path: str) -> str:
+    """Resolve a user-supplied path and ensure it stays within the project root.
+
+    Raises HTTPException(403) on directory traversal attempt.
+    """
+    settings = get_settings()
+    # Resolve the project root (parent of backend/)
+    project_root = os.path.abspath(os.path.join(settings.uml_dir, "..", ".."))
+
+    if not user_path:
+        return os.path.abspath(settings.uml_dir)
+
+    # If relative, anchor it to the project root
+    if not os.path.isabs(user_path):
+        candidate = os.path.abspath(os.path.join(project_root, user_path))
+    else:
+        candidate = os.path.abspath(user_path)
+
+    # Resolve symlinks to defeat symlink-based escapes
+    try:
+        real_candidate = os.path.realpath(candidate)
+        real_root = os.path.realpath(project_root)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    # Must be within the project root
+    if os.path.commonpath([real_candidate, real_root]) != real_root:
+        raise HTTPException(status_code=403, detail="Access denied: path outside project")
+
+    return real_candidate
+
+
 # ── Directory browsing ──────────────────────────────────
 
 @router.get("/browse")
 async def browse_directory(path: str = ""):
     """Browse a directory. Returns subdirectories and .uml files."""
     settings = get_settings()
-    base = path if path else settings.uml_dir
-    if not os.path.isabs(base):
-        base = os.path.abspath(base)
-    if not os.path.exists(base):
+
+    try:
+        base = _safe_path(path)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not os.path.exists(base) or not os.path.isdir(base):
         base = os.path.abspath(settings.uml_dir)
 
     try:
@@ -112,7 +180,16 @@ async def browse_directory(path: str = ""):
                 "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             })
 
-    parent = os.path.dirname(base).replace("\\", "/") if base != os.path.abspath(settings.uml_dir) else ""
+    project_root = os.path.abspath(os.path.join(settings.uml_dir, "..", ".."))
+    parent = ""
+    if base != project_root and base != os.path.abspath(settings.uml_dir):
+        parent_dir = os.path.dirname(base)
+        # Only allow parent if it's within the project
+        try:
+            _safe_path(parent_dir)
+            parent = parent_dir.replace("\\", "/")
+        except HTTPException:
+            parent = ""
 
     return {
         "current": base.replace("\\", "/"),
@@ -132,7 +209,7 @@ class ReviewRequest(BaseModel):
     optimized_name: str = ""
     timestamp: str = ""
 
-@router.post("/save-review")
+@router.post("/save-review", dependencies=[Depends(require_auth)])
 async def save_review(req: ReviewRequest):
     """Save optimization review to dev_review.txt."""
     settings = get_settings()
@@ -166,31 +243,41 @@ class SaveGeneratedRequest(BaseModel):
     test_files: dict[str, str] = {}    # filename -> content
 
 
-@router.post("/save-generated")
+@router.post("/save-generated", dependencies=[Depends(require_auth)])
 async def save_generated_code(req: SaveGeneratedRequest):
     """Save generated source and test code to generated/ folder."""
     settings = get_settings()
     base = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "generated"))
 
+    # Sanitize project_name and language to prevent path traversal
+    safe_project = _sanitize_path_segment(req.project_name) or "project"
+    safe_lang = _sanitize_path_segment(req.language) or "python"
+
     # Create project folders
-    src_dir = os.path.join(base, "src", req.project_name, req.language)
-    test_dir = os.path.join(base, "test", req.project_name, req.language)
+    src_dir = os.path.join(base, "src", safe_project, safe_lang)
+    test_dir = os.path.join(base, "test", safe_project, safe_lang)
     os.makedirs(src_dir, exist_ok=True)
     os.makedirs(test_dir, exist_ok=True)
 
     saved = {"src": [], "test": []}
 
     for fname, content in req.source_files.items():
-        fp = os.path.join(src_dir, fname)
+        safe_fname = os.path.basename(fname)  # strip any directory components
+        if not safe_fname or safe_fname.startswith("."):
+            continue
+        fp = os.path.join(src_dir, safe_fname)
         with open(fp, "w", encoding="utf-8") as f:
             f.write(content)
-        saved["src"].append(fname)
+        saved["src"].append(safe_fname)
 
     for fname, content in req.test_files.items():
-        fp = os.path.join(test_dir, fname)
+        safe_fname = os.path.basename(fname)
+        if not safe_fname or safe_fname.startswith("."):
+            continue
+        fp = os.path.join(test_dir, safe_fname)
         with open(fp, "w", encoding="utf-8") as f:
             f.write(content)
-        saved["test"].append(fname)
+        saved["test"].append(safe_fname)
 
     return {
         "success": True,

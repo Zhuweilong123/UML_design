@@ -4,9 +4,15 @@ import axios from 'axios';
 import type { UmlDiagram } from '../types/uml';
 import type { PipelineState } from '../types/pipeline';
 
+// Read auth token from Vite env var (VITE_API_TOKEN in .env.local)
+const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 60000,
+  headers: API_TOKEN
+    ? { Authorization: `Bearer ${API_TOKEN}` }
+    : {},
 });
 
 // ─── Files ──────────────────────────────────────────────
@@ -124,7 +130,8 @@ export function createPipelineWs(
   autoConfirm = false,
 ): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/api/pipeline/ws/${pipelineId}`;
+  const tokenParam = API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : '';
+  const wsUrl = `${protocol}//${window.location.host}/api/pipeline/ws/${pipelineId}${tokenParam}`;
   const ws = new WebSocket(wsUrl);
   ws.onopen = () => {
     ws.send(JSON.stringify({ diagram, language, auto_confirm: autoConfirm }));
