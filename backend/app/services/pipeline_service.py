@@ -612,18 +612,23 @@ async def _run_test_and_optimize(
     # Stage 7: Code Optimize — use real test results to fix source
     # ═══════════════════════════════════════════════════════════════
     rounds_history = []
-    prev_pass_rate = 0  # P1-4: track previous pass rate for rollback
+    round_context = ""
+    prev_failed_names: set[str] = set()
+    stale_count = 0
+    prev_pass_rate = 0
+
     for round_num in range(1, 4):
         pipeline.optimization_round = round_num
         yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
                                    f"Code optimization round {round_num}/3")
 
-        # P1-4: Save snapshot before optimization
+        # Save snapshot before optimization
         prev_code = {**current_code}
 
         # Ask LLM to fix source code based on real test failures
         optimized_code = await _optimize_source_from_tests(
-            current_code, test_files, test_results_text, language, round_num
+            current_code, test_files, test_results_text, language, round_num,
+            round_context=round_context,
         )
         if optimized_code and _validate_files_match(optimized_code, current_code, "Stage7 optimize"):
             current_code = optimized_code
@@ -641,21 +646,51 @@ async def _run_test_and_optimize(
         total = passed + failed
         pass_rate = round(passed / total * 100) if total > 0 else 0
 
-        # P1-4: Rollback on regression
+        # Extract failing test names for staleness tracking
+        new_failed_names = set(_re.findall(
+            r'Test:\s*\S+::(\S+)\s*->\s*FAIL', new_test_results
+        ))
+
+        # Rollback on regression
         rolled_back = False
         if round_num > 1 and pass_rate < prev_pass_rate:
             logger.warning(f"[Stage7] Round {round_num}: REGRESSION {prev_pass_rate}% → {pass_rate}%, rolling back")
             current_code = prev_code
             _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
             rolled_back = True
-            # Re-run pytest on rolled-back code to get consistent results
             new_test_results = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
             passed = len(_re.findall(r'->\s*PASS', new_test_results, _re.IGNORECASE))
             failed = len(_re.findall(r'->\s*FAIL', new_test_results, _re.IGNORECASE))
             total = passed + failed
             pass_rate = round(passed / total * 100) if total > 0 else 0
+            new_failed_names = set(_re.findall(r'Test:\s*\S+::(\S+)\s*->\s*FAIL', new_test_results))
 
-        logger.info(f"[Stage7] Round {round_num}: {passed}P/{failed}F/{total}T = {pass_rate}%{' (rolled back)' if rolled_back else ''}")
+        # Build round context for next round (Direction A: inter-round memory)
+        prev_stats = f"Round {round_num}: {passed}P/{failed}F/{total}T = {pass_rate}%"
+        change_note = ""
+        if prev_failed_names:
+            fixed_this_round = prev_failed_names - new_failed_names
+            still_failing = prev_failed_names & new_failed_names
+            new_failures = new_failed_names - prev_failed_names
+            parts = []
+            if fixed_this_round:
+                parts.append(f"Fixed: {', '.join(sorted(fixed_this_round))}")
+            if still_failing:
+                parts.append(f"Still failing: {', '.join(sorted(still_failing))}")
+            if new_failures:
+                parts.append(f"New failures: {', '.join(sorted(new_failures))}")
+            change_note = "; ".join(parts)
+        round_context = f"{prev_stats}\n{change_note}\n"
+
+        # Detect stale failures (Direction D: early exit)
+        stale_now = prev_failed_names & new_failed_names if round_num > 1 else set()
+        if stale_now == new_failed_names and round_num > 1:
+            stale_count += 1
+        else:
+            stale_count = 0
+
+        logger.info(f"[Stage7] Round {round_num}: {passed}P/{failed}F/{total}T = {pass_rate}%{' (rolled back)' if rolled_back else ''} | Stale: {stale_count}")
+        logger.info(f"[Stage7] Context: {round_context.strip()}")
 
         round_record = {
             "round": round_num,
@@ -665,22 +700,29 @@ async def _run_test_and_optimize(
             "total": total,
             "pass_rate": pass_rate,
             "rolled_back": rolled_back,
+            "round_context": round_context.strip(),
         }
         rounds_history.append(round_record)
 
         pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": new_test_results}
         pipeline.stages[6].result = {"rounds": rounds_history}
 
-        yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
-                                   f"Round {round_num}: {passed}P/{failed}F = {pass_rate}%{' (rolled back)' if rolled_back else ''}")
-
-        # Early exit if all tests pass
+        # Early exit: all tests pass
         if failed == 0:
             yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.SUCCESS,
                                        f"All {total} tests pass after round {round_num}")
             break
 
+        # Early exit: same failures persist across rounds — likely not a source code issue
+        if stale_count >= 2:
+            stale_list = ", ".join(sorted(new_failed_names))
+            msg = f"以下 {len(new_failed_names)} 个用例在 {round_num} 轮优化后无改善，可能不是源码问题，请人工审查：{stale_list}"
+            logger.warning(f"[Stage7] Early exit: {msg}")
+            yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.SUCCESS, msg)
+            break
+
         prev_pass_rate = pass_rate
+        prev_failed_names = new_failed_names
         test_results_text = new_test_results
 
     else:
@@ -854,12 +896,13 @@ async def _optimize_source_from_tests(
     test_results: str,
     language: str,
     round_num: int,
+    round_context: str = "",
 ) -> dict[str, str]:
     """Ask LLM to optimize source code based on real pytest failures.
 
     Returns updated source code only (test code is never modified by Stage 7).
-    The LLM receives the test code for context so it can understand what API
-    the tests expect and add missing functions/attributes to the source.
+    The LLM receives the test code for context and previous round history so it
+    can build on prior fixes rather than starting from scratch each round.
     """
     src_text = "\n\n".join(
         f"### {fname}\n```{language}\n{content}\n```"
@@ -871,9 +914,16 @@ async def _optimize_source_from_tests(
     )
     failures = [l for l in test_results.split("\n") if "-> FAIL" in l]
 
+    context_block = ""
+    if round_context:
+        context_block = f"""## Previous Round Results:
+{round_context}
+
+"""
+
     prompt = f"""Fix the source code to make the failing tests pass.  You may ONLY modify source files.
 
-## Source Code (modify this):
+{context_block}## Source Code (modify this):
 {src_text[:6000]}
 
 ## Test Code (for reference — understand what API the tests expect):
@@ -883,9 +933,9 @@ async def _optimize_source_from_tests(
 {chr(10).join(failures[:30])}
 
 ## Rules:
-- Only return MODIFIED source files — do NOT return test files
+- If previous round tried to fix something and it still fails → try a DIFFERENT approach this round
 - If a test tries to access a function/attribute that does not exist → add it to the source
-- If a test gets an AttributeError on a module → the module is missing an export, add it
+- If a test gets an AssertionError → analyze the actual vs expected values and fix the implementation logic
 - Keep the public API compatible with ALL tests (passing AND failing)
 - Return the COMPLETE corrected source files as a JSON object
 
@@ -909,7 +959,6 @@ Only output the JSON object, no other text.
         fixed = json.loads(cleaned)
         if _validate_files_match(fixed, source_code, "Stage7 optimize"):
             logger.info(f"[Stage7] LLM returned optimized source files: {list(fixed.keys())}")
-            # Only accept files that exist in original, replace content
             result = {**source_code}
             for k in source_code:
                 if k in fixed:
@@ -1409,6 +1458,22 @@ async def resume_pipeline(
     if test_dir:
         existing_tests = _load_files_from_directory(test_dir, language)
         if existing_tests:
+            # Detect missing test modules — source files with no corresponding test
+            src_modules = {fname.rsplit(".", 1)[0] for fname in current_code}
+            test_modules = set()
+            for fname in existing_tests:
+                base = fname.replace("test_", "").rsplit(".", 1)[0]
+                test_modules.add(base)
+            missing_modules = src_modules - test_modules
+            if missing_modules:
+                missing_note = "\n\n## CRITICAL: Missing test files detected!\n"
+                missing_note += "The following source modules have NO corresponding test file.\n"
+                missing_note += "Generate complete test files for them:\n"
+                for m in sorted(missing_modules):
+                    missing_note += f"- test_{m}.py  (tests for {m}.py)\n"
+                test_cases_data = (test_cases_data or "") + missing_note
+                logger.info(f"[Pipeline Stage 5] Missing test modules detected: {missing_modules}")
+
             yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING,
                                        f"Incrementally updating {len(existing_tests)} existing test files...")
             try:
