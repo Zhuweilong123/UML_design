@@ -9,6 +9,7 @@ import {
   DiffOutlined, CloseOutlined, FileTextOutlined,
 } from '@ant-design/icons';
 import UMLEditor from './components/Canvas/UMLEditor';
+import SeqEditor from './components/Canvas/SeqEditor';
 import Toolbar from './components/Toolbar/Toolbar';
 import PropertyPanel from './components/PropertyPanel/PropertyPanel';
 import CodeViewer from './components/CodeViewer/CodeViewer';
@@ -17,6 +18,7 @@ import DiffViewer from './components/DiffViewer/DiffViewer';
 import TestCaseViewer from './components/TestCaseViewer/TestCaseViewer';
 import TestCodeViewer from './components/TestCodeViewer/TestCodeViewer';
 import { useUiStore, type RightPanelTab } from './stores/uiStore';
+import { useDiagramStore } from './stores/diagramStore';
 import './App.css';
 
 const { Sider, Content } = Layout;
@@ -27,6 +29,8 @@ const App: React.FC = () => {
     setRightPanelTab, setRightPanelWidth, toggleRightPanel,
     codeGenLoading, showTestCaseInCanvas,
   } = useUiStore();
+  const diagramType = useDiagramStore((s) => s.diagram.diagram_type || 'class');
+  const activeIdx = useDiagramStore((s) => s.project.active_diagram_index);
 
   const handleResize = useCallback((_e: React.MouseEvent, direction: string, ref: HTMLElement) => {
     if (direction === 'left') {
@@ -101,13 +105,17 @@ const App: React.FC = () => {
         <Content className="app-content">
           {showTestCaseInCanvas ? (
             <TestCaseViewer embedded />
+          ) : diagramType === 'sequence' ? (
+            <SeqEditor key={`seq_${activeIdx}`} />
           ) : (
-            <UMLEditor />
+            <UMLEditor key={`uml_${activeIdx}`} />
           )}
           {/* Status bar */}
           <div className="status-bar">
             {showTestCaseInCanvas ? (
               <span>双击单元格编辑用例 | 支持增删查改 | 全量/增量生成测试代码</span>
+            ) : diagramType === 'sequence' ? (
+              <span>双击画布添加生命线 | 点击生命线A→再点生命线B创建消息 | 点击消息编辑类型 | Ctrl+滚轮缩放</span>
             ) : (
               <span>双击画布添加类 | 拖拽端口创建连接 | Ctrl+滚轮缩放 | 空格平移</span>
             )}

@@ -325,25 +325,44 @@ def _normalize_llm_output(data: dict) -> dict:
 
 
 async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
-    """Ask LLM to optimize a UML diagram design."""
-    prompt = f"""Analyze and optimize the following UML class diagram.
+    """Ask LLM to optimize a UML diagram design. Handles both class and sequence diagrams."""
+    dt = diagram.diagram_type or "class"
 
-## Current Diagram (reference the exact field names and structure):
+    if dt == "sequence":
+        type_hint = "sequence diagram with lifelines and messages"
+        rules = """CRITICAL RULES:
+1. Use EXACTLY the same JSON field names and structure as the input.
+2. lifelines: "id", "name", "class_ref", "x", "activations"
+3. messages: "id", "from_lifeline", "to_lifeline", "label", "type" (sync|async|return|simple|self), "order", "note"
+4. Every lifeline and message MUST have a unique "id"
+5. Message "order" should be sequential from top to bottom
+6. PRESERVE all "note" and "class_ref" fields"""
+        default_inst = "优化时序图交互流程：检查遗漏/多余消息、调用顺序合理性、消息命名准确性"
+        system = "You are an expert software architect specializing in UML sequence diagrams and interaction design."
+    else:
+        type_hint = "UML class diagram"
+        rules = """CRITICAL RULES:
+1. Use EXACTLY the same JSON field names as the input. Relations use "source"/"target"
+2. visibility values MUST be "+", "-", or "#"
+3. stereotype values MUST be "class", "interface", "abstract", or "enum"
+4. relation type values MUST be "inheritance", "composition", "aggregation", "association", "realization", or "dependency"
+5. Every class and relation MUST have a unique "id"
+6. PRESERVE all "note" fields on classes and relations
+7. PRESERVE "role_name", "multiplicity_source", "multiplicity_target" on relations"""
+        default_inst = "General design optimization: improve cohesion, reduce coupling, apply design patterns where appropriate."
+        system = "You are an expert software architect specializing in UML design and design patterns. Always use +, -, # for visibility values."
+
+    prompt = f"""Analyze and optimize the following {type_hint}.
+
+## Current Diagram:
 ```json
 {diagram.model_dump_json(indent=2)}
 ```
 
 ## User Instructions:
-{instructions or "General design optimization: improve cohesion, reduce coupling, apply design patterns where appropriate."}
+{instructions or default_inst}
 
-## CRITICAL RULES:
-1. Use EXACTLY the same JSON field names as the input. Relations use "source"/"target" (NOT "from"/"to"/"source_id").
-2. visibility values MUST be "+", "-", or "#" (NOT "public"/"private"/"protected").
-3. stereotype values MUST be "class", "interface", "abstract", or "enum".
-4. relation type values MUST be "inheritance", "composition", "aggregation", "association", "realization", or "dependency".
-5. Every class and relation MUST have a unique "id" field.
-6. PRESERVE all "note" fields on classes and relations — these contain business requirements.
-7. PRESERVE "role_name", "multiplicity_source", "multiplicity_target" on relations.
+## {rules}
 
 ## Output Format:
 ```json
@@ -357,7 +376,7 @@ Only output the JSON object, no other text.
 """
     response = await chat(
         prompt=prompt,
-        system_prompt="You are an expert software architect specializing in UML design and design patterns. Always use +, -, # for visibility values.",
+        system_prompt=system,
         temperature=0.5,
         max_tokens=8192,
     )

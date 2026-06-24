@@ -87,14 +87,44 @@ class UmlRelation(BaseModel):
     note: str = ""
 
 
+# ---------- Sequence Diagram models ----------
+
+
+class SeqLifeline(BaseModel):
+    model_config = {"extra": "ignore"}
+    id: str
+    name: str = "Participant"
+    class_ref: str = ""   # optional: UmlClass.id from class diagram
+    x: float = 100
+    activations: list[float] = Field(default_factory=list)  # y-offsets of activation bars
+
+
+class SeqMessage(BaseModel):
+    model_config = {"extra": "ignore"}
+    id: str
+    from_lifeline: str    # SeqLifeline.id
+    to_lifeline: str      # SeqLifeline.id
+    label: str = ""        # method name
+    type: str = "sync"     # "sync" | "async" | "return" | "simple" | "self"
+    order: int = 0         # vertical sequence number
+    y: float = 0           # persisted Y position
+    note: str = ""         # functional comment
+
+
 # ---------- UML Diagram (file format) ----------
 
 class UmlDiagram(BaseModel):
     model_config = {"extra": "ignore"}
     version: str = "1.0"
     name: str = "Untitled"
+    diagram_type: str = "class"  # "class" | "sequence" | "component"
+    # --- Class diagram fields ---
     classes: list[UmlClass] = Field(default_factory=list)
     relations: list[UmlRelation] = Field(default_factory=list)
+    # --- Sequence diagram fields ---
+    lifelines: list[SeqLifeline] = Field(default_factory=list)
+    messages: list[SeqMessage] = Field(default_factory=list)
+    # --- Shared view state ---
     grid_visible: bool = True
     grid_size: int = 20
     grid_color: str = "#e0e0e0"
@@ -103,6 +133,38 @@ class UmlDiagram(BaseModel):
     zoom: float = 1.0
     pan_x: float = 0
     pan_y: float = 0
+
+
+# ---------- Project (multi-diagram container) ----------
+
+class Project(BaseModel):
+    """A project contains multiple diagrams of different types.
+
+    The active_diagram_index points to the diagram currently being edited.
+    Backward-compatible: opening a single .uml file wraps it in a Project
+    with one diagram.
+    """
+    model_config = {"extra": "ignore"}
+    version: str = "1.0"
+    name: str = "Untitled"
+    diagrams: list[UmlDiagram] = Field(default_factory=list)
+    active_diagram_index: int = 0
+
+    @property
+    def active_diagram(self) -> UmlDiagram:
+        if 0 <= self.active_diagram_index < len(self.diagrams):
+            return self.diagrams[self.active_diagram_index]
+        return UmlDiagram(name=self.name)
+
+
+def create_default_project(name: str = "Untitled") -> Project:
+    """Create a new project with one default class diagram."""
+    import logging
+    logger = logging.getLogger(__name__)
+    diagram = UmlDiagram(name=name)
+    project = Project(name=name, diagrams=[diagram], active_diagram_index=0)
+    logger.info(f"[Project] Created new project '{name}' with 1 class diagram")
+    return project
 
 
 # ---------- LLM ----------

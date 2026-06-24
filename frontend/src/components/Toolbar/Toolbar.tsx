@@ -2,7 +2,7 @@
  * Top Toolbar – file operations, LLM actions, view controls.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Button, Select, Tooltip, Dropdown, Modal, List, message,
   Divider, Input, Form, Slider,
@@ -14,11 +14,13 @@ import {
   ZoomInOutlined, ZoomOutOutlined, ExpandOutlined,
   AppstoreOutlined, EyeInvisibleOutlined,
   PlusSquareOutlined, DownOutlined, TableOutlined,
+  ProjectOutlined, ApartmentOutlined, ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
 import {
   saveDiagram, openDiagram, listDiagrams,
+  saveProject, openProject, listProjects,
   exportMarkdown, generateCode as apiGenerateCode,
   optimizeUml as apiOptimizeUml, createPipeline,
   browseDirectory, type BrowseResult,
@@ -45,8 +47,9 @@ const LANGUAGES = [
 
 const Toolbar: React.FC = () => {
   const {
-    diagram, isModified, undoStack, redoStack,
+    diagram, project, isModified, undoStack, redoStack,
     undo, redo, setDiagram, newDiagram: clearDiagram,
+    setProject, newProject, setActiveDiagram, addDiagram,
     toggleGrid, setGridSize, setGridColor, setGridThickness,
     setCurrentFilepath, currentFilepath,
   } = useDiagramStore();
@@ -75,18 +78,36 @@ const Toolbar: React.FC = () => {
   const [optimizing, setOptimizing] = useState(false);
   const [gridSettingsVisible, setGridSettingsVisible] = useState(false);
 
+  // ── Ctrl+S global save ──────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [currentFilepath, project, isModified]); // eslint-disable-line
+
   // ── File operations ─────────────────────────────────
   const handleNew = () => {
+    const doNew = () => {
+      newProject();
+      message.success('已创建新项目');
+    };
     if (isModified) {
       Modal.confirm({
         title: '未保存的更改',
-        content: '当前图表有未保存的更改，确定要新建吗？',
-        onOk: () => clearDiagram(),
+        content: '当前项目有未保存的更改，确定要新建吗？',
+        onOk: doNew,
         okText: '确定新建',
         cancelText: '取消',
       });
     } else {
-      clearDiagram();
+      doNew();
     }
   };
 
@@ -114,36 +135,44 @@ const Toolbar: React.FC = () => {
     }
   };
 
-  const handleOpenFile = async (path: string) => {
+  const handleOpenFile = async (path: string, isProject: boolean) => {
     try {
-      const d = await openDiagram(path);
-      setDiagram(d);
-      setCurrentFilepath(path);
-      setFileDialogVisible(false);
-      message.success('文件已打开');
+      if (isProject) {
+        const proj = await openProject(path);
+        setProject(proj);
+        setCurrentFilepath(path);
+        setFileDialogVisible(false);
+        message.success(`项目已打开: ${proj.name} (${proj.diagrams.length} 张图)`);
+      } else {
+        const d = await openDiagram(path);
+        setDiagram(d);
+        setCurrentFilepath(path);
+        setFileDialogVisible(false);
+        message.success('文件已打开');
+      }
     } catch {
       message.error('打开文件失败');
     }
   };
 
-  // Quick save (to current path, or prompt Save As)
+  // Quick save (always saves as .umlproj project)
   const handleSave = async () => {
-    if (currentFilepath) {
-      try {
-        const result = await saveDiagram(diagram);
-        setCurrentFilepath(result.filepath);
-        message.success(`已保存: ${result.filename}`);
-      } catch {
-        message.error('保存失败');
-      }
-    } else {
+    if (!currentFilepath) {
       openSaveAs();
+      return;
+    }
+    try {
+      const result = await saveProject(project, currentFilepath);
+      setCurrentFilepath(result.filepath);
+      message.success(`项目已保存: ${result.filename}`);
+    } catch {
+      message.error('保存失败');
     }
   };
 
   // Open Save As dialog
   const openSaveAs = async () => {
-    setSaveFilename(diagram.name || 'Untitled');
+    setSaveFilename(project.name || 'Untitled');
     try {
       const result = await browseDirectory('');
       setBrowseData(result);
@@ -155,11 +184,12 @@ const Toolbar: React.FC = () => {
   const handleSaveAs = async () => {
     setSaving(true);
     try {
-      const fname = saveFilename.trim() || 'Untitled';
-      const result = await saveDiagram(diagram, fname);
+      const fname = saveFilename.trim() || project.name || 'Untitled';
+      // Always save as project (.umlproj)
+      const result = await saveProject(project, fname);
       setCurrentFilepath(result.filepath);
       setSaveAsVisible(false);
-      message.success(`已保存: ${result.filename}`);
+      message.success(`项目已保存: ${result.filename}`);
     } catch {
       message.error('保存失败');
     }
@@ -184,6 +214,11 @@ const Toolbar: React.FC = () => {
 
   // ── LLM operations ──────────────────────────────────
   const handleGenerateCode = async () => {
+    const dt = diagram.diagram_type || 'class';
+    if (dt !== 'class') {
+      message.warning('代码生成目前仅支持类图');
+      return;
+    }
     setCodeGenLoading(true);
     message.loading({ content: '正在生成代码...', key: 'codegen' });
     try {
@@ -191,12 +226,11 @@ const Toolbar: React.FC = () => {
       setGeneratedCode(result.files);
       setRightPanelTab('code');
       setRightPanelVisible(true);
-      // Save to disk in background
       saveGeneratedCode({
         project_name: diagram.name, language: selectedLanguage,
         source_files: result.files, test_files: {},
       }).catch(() => {});
-      message.success({ content: `已生成 ${Object.keys(result.files).length} 个文件 → generated/src/${diagram.name}/${selectedLanguage}/`, key: 'codegen', duration: 5 });
+      message.success({ content: `已生成 ${Object.keys(result.files).length} 个文件 → generated/src`, key: 'codegen', duration: 5 });
     } catch (e) {
       message.error({ content: '代码生成失败: ' + String(e), key: 'codegen' });
     }
@@ -205,8 +239,12 @@ const Toolbar: React.FC = () => {
 
   // Open optimize dialog first, then send to LLM
   const handleOptimizeClick = () => {
-    if (!diagram.classes.length) {
-      message.warning('请先添加类到图表中');
+    const dt = diagram.diagram_type || 'class';
+    const data = dt === 'sequence'
+      ? (diagram.lifelines || [])
+      : diagram.classes;
+    if (!data.length) {
+      message.warning(dt === 'sequence' ? '请先添加生命线到时序图中' : '请先添加类到图表中');
       return;
     }
     setOptimizeInstructions('');
@@ -215,7 +253,8 @@ const Toolbar: React.FC = () => {
 
   const handleOptimizeConfirm = async () => {
     setOptimizing(true);
-    message.loading({ content: 'LLM 正在分析优化 UML...', key: 'optimize' });
+    const dt = diagram.diagram_type || 'class';
+    message.loading({ content: dt === 'sequence' ? 'LLM 正在分析优化时序图...' : 'LLM 正在分析优化 UML...', key: 'optimize' });
     try {
       const result = await apiOptimizeUml(diagram, optimizeInstructions);
       setOptimizationResult(result.original, result.optimized, result.changes_summary, optimizeInstructions);
@@ -274,19 +313,39 @@ const Toolbar: React.FC = () => {
 
         <Divider type="vertical" />
 
-        {/* Add Class */}
-        <Tooltip title="添加类 (双击画布亦可)">
-          <Button
-            type="primary"
-            icon={<PlusSquareOutlined />}
-            onClick={() => {
-              const x = 150 + Math.random() * 400;
-              const y = 100 + Math.random() * 300;
-              useDiagramStore.getState().addClass({ x, y });
-            }}
-          >
-            添加类
-          </Button>
+        {/* Diagram tabs — switch between diagrams */}
+        {project.diagrams.map((d, i) => {
+          const isActive = i === project.active_diagram_index;
+          const type = d.diagram_type || 'class';
+          const icon = type === 'sequence'
+            ? <ClockCircleOutlined />
+            : <ApartmentOutlined />;
+          const label = type === 'sequence' ? '时序图' : (d.name || '类图');
+          return (
+            <Tooltip key={i} title={type === 'sequence' ? '时序图' : '类图（双击画布添加类）'}>
+              <Button
+                type={isActive ? 'primary' : 'default'}
+                icon={icon}
+                onClick={() => setActiveDiagram(i)}
+                style={{ marginRight: 2 }}
+              >
+                {label}
+              </Button>
+            </Tooltip>
+          );
+        })}
+
+        <Tooltip title="添加新图">
+          <Dropdown menu={{
+            items: [
+              { key: 'class', label: '添加类图', icon: <ApartmentOutlined />,
+                onClick: () => addDiagram('class') },
+              { key: 'sequence', label: '添加时序图', icon: <ClockCircleOutlined />,
+                onClick: () => addDiagram('sequence') },
+            ],
+          }} trigger={['click']}>
+            <Button icon={<PlusSquareOutlined />} />
+          </Dropdown>
         </Tooltip>
 
         <Divider type="vertical" />
@@ -416,15 +475,33 @@ const Toolbar: React.FC = () => {
               />
             </List.Item>
           ))}
-          {/* UML files */}
-          {browseData?.files?.map((item) => (
+          {/* Project files (.umlproj) — shown first */}
+          {browseData?.files?.filter(f => f.type === 'project').map((item) => (
             <List.Item
               key={item.path}
-              onClick={() => handleOpenFile(item.path)}
+              onClick={() => handleOpenFile(item.path, true)}
+              style={{ cursor: 'pointer', background: '#f0f5ff' }}
+            >
+              <List.Item.Meta
+                avatar={<ProjectOutlined style={{ fontSize: 18, color: '#1890ff' }} />}
+                title={<span style={{ fontSize: 13 }}>📦 {item.name}</span>}
+                description={
+                  <span style={{ fontSize: 11 }}>
+                    {new Date(item.modified).toLocaleString()} | {(item.size / 1024).toFixed(1)} KB
+                  </span>
+                }
+              />
+            </List.Item>
+          ))}
+          {/* Single diagram files (.uml) */}
+          {browseData?.files?.filter(f => f.type !== 'project').map((item) => (
+            <List.Item
+              key={item.path}
+              onClick={() => handleOpenFile(item.path, false)}
               style={{ cursor: 'pointer' }}
             >
               <List.Item.Meta
-                title={<span style={{ fontSize: 13 }}>{item.name}</span>}
+                title={<span style={{ fontSize: 13 }}>📄 {item.name}</span>}
                 description={
                   <span style={{ fontSize: 11 }}>
                     {new Date(item.modified).toLocaleString()} | {(item.size / 1024).toFixed(1)} KB
@@ -448,29 +525,29 @@ const Toolbar: React.FC = () => {
         width={550}
       >
         <Form layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="文件名 (.uml)">
+          <Form.Item label="文件名 (.umlproj)">
             <Input
               value={saveFilename}
               onChange={(e) => setSaveFilename(e.target.value)}
-              suffix=".uml"
-              placeholder="输入文件名..."
+              suffix=".umlproj"
+              placeholder="输入项目名称..."
               autoFocus
             />
           </Form.Item>
         </Form>
 
         <Divider orientation="left" plain style={{ fontSize: 12 }}>
-          已有文件（保存在 {currentFilepath || 'uml_files/'}）
+          已有项目文件（保存在 {currentFilepath || 'uml_files/'}）
         </Divider>
 
         <List
           loading={false}
           dataSource={fileList.slice(0, 8)}
-          locale={{ emptyText: '暂无已保存的文件' }}
+          locale={{ emptyText: '暂无已保存的项目' }}
           size="small"
           renderItem={(item) => (
             <List.Item
-              onClick={() => setSaveFilename(item.name.replace('.uml', ''))}
+              onClick={() => setSaveFilename(item.name.replace('.umlproj', '').replace('.uml', ''))}
               style={{ cursor: 'pointer' }}
             >
               <List.Item.Meta
@@ -488,7 +565,7 @@ const Toolbar: React.FC = () => {
 
       {/* ── Optimize UML Dialog ──────────────────────── */}
       <Modal
-        title="UML 设计优化"
+        title={diagram.diagram_type === 'sequence' ? '时序图优化' : 'UML 设计优化'}
         open={optimizeVisible}
         onCancel={() => setOptimizeVisible(false)}
         onOk={handleOptimizeConfirm}
@@ -498,14 +575,18 @@ const Toolbar: React.FC = () => {
         width={600}
       >
         <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
-          当前类图包含 <strong>{diagram.classes.length}</strong> 个类，
-          <strong>{diagram.relations.length}</strong> 条关系。
+          {diagram.diagram_type === 'sequence'
+            ? <>当前时序图包含 <strong>{(diagram.lifelines || []).length}</strong> 个生命线，<strong>{(diagram.messages || []).length}</strong> 条消息。</>
+            : <>当前类图包含 <strong>{diagram.classes.length}</strong> 个类，<strong>{diagram.relations.length}</strong> 条关系。</>
+          }
           请输入你的优化需求，LLM 将结合当前设计和你的需求进行优化：
         </p>
         <TextArea
           value={optimizeInstructions}
           onChange={(e) => setOptimizeInstructions(e.target.value)}
-          placeholder={'例如：\n• 将User和Order改为聚合关系\n• 为Payment添加refund方法\n• 提取公共接口IPayable\n• 优化类的职责划分，减少耦合\n• 应用工厂模式改造创建逻辑\n...'}
+          placeholder={diagram.diagram_type === 'sequence'
+            ? '例如：\n• 为OtaTask和CrowTask之间增加异常处理消息\n• 补充缺失的返回消息\n• 调整消息调用顺序使其更合理\n• 为关键消息添加功能备注\n...'
+            : '例如：\n• 将User和Order改为聚合关系\n• 为Payment添加refund方法\n• 提取公共接口IPayable\n• 优化类的职责划分，减少耦合\n• 应用工厂模式改造创建逻辑\n...'}
           rows={6}
           autoFocus
         />

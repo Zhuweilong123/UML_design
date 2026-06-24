@@ -1,36 +1,72 @@
-/** Diagram store – manages the UML diagram state and operations. */
+/** Diagram store — manages Project state with multiple diagrams. */
 
 import { create } from 'zustand';
-import type { UmlDiagram, UmlClass, UmlRelation, Position, Size } from '../types/uml';
-import { createDefaultDiagram, createDefaultClass, createDefaultRelation } from '../types/uml';
+import type { UmlDiagram, UmlClass, UmlRelation, Position, Size, Project } from '../types/uml';
+import { createDefaultDiagram, createDefaultClass, createDefaultRelation, createDefaultProject } from '../types/uml';
+import type { SeqLifeline, SeqMessage } from '../types/sequence';
+import { createDefaultLifeline, createDefaultMessage } from '../types/sequence';
 
-// Undo/Redo snapshot
+// Undo/Redo snapshot (per-diagram)
 interface Snapshot {
   diagram: UmlDiagram;
   timestamp: number;
 }
 
+// Helper: get active diagram from project (with safety fallback)
+function _activeDiagram(project: Project): UmlDiagram {
+  const idx = project.active_diagram_index;
+  if (idx >= 0 && idx < project.diagrams.length) {
+    return project.diagrams[idx];
+  }
+  console.warn('[Store] Invalid active_diagram_index', idx, project.diagrams.length);
+  return project.diagrams[0] || createDefaultDiagram();
+}
+
+// Helper: update the active diagram within a project
+function _updateActiveDiagram(project: Project, updater: (d: UmlDiagram) => UmlDiagram): Project {
+  const idx = project.active_diagram_index;
+  return {
+    ...project,
+    diagrams: project.diagrams.map((d, i) => (i === idx ? updater(d) : d)),
+  };
+}
+
 interface DiagramState {
   // Core state
-  diagram: UmlDiagram;
+  project: Project;
   selectedClassId: string | null;
   selectedRelationId: string | null;
   isModified: boolean;
   currentFilepath: string | null;
 
-  // History
+  // History (per active diagram)
   undoStack: Snapshot[];
   redoStack: Snapshot[];
   lastOperationTime: number;
   maxHistorySteps: number;
   mergeWindowMs: number;
 
-  // Actions
+  // ── Diagram access ────────────────────────────
+
+  /** Convenience getter for the currently active diagram. */
+  diagram: UmlDiagram;
+
+  // ── Project actions ───────────────────────────
+
+  setProject: (project: Project) => void;
+  newProject: (name?: string) => void;
+  setActiveDiagram: (index: number) => void;
+  addDiagram: (type?: string, name?: string) => void;
+  removeDiagram: (index: number) => void;
+
+  // ── Legacy diagram actions (kept for compatibility) ──
+
   setDiagram: (diagram: UmlDiagram) => void;
   newDiagram: (name?: string) => void;
   markModified: () => void;
 
-  // Class operations
+  // ── Class operations ──────────────────────────
+
   addClass: (position?: Position) => void;
   removeClass: (id: string) => void;
   updateClass: (id: string, updates: Partial<UmlClass>) => void;
@@ -38,37 +74,63 @@ interface DiagramState {
   resizeClass: (id: string, size: Size) => void;
   selectClass: (id: string | null) => void;
 
-  // Relation operations
+  // ── Relation operations ────────────────────────
+
   addRelation: (source: string, target: string) => void;
   removeRelation: (id: string) => void;
   updateRelation: (id: string, updates: Partial<UmlRelation>) => void;
   selectRelation: (id: string | null) => void;
 
-  // Grid
+  // ── Sequence diagram operations ──────────────
+
+  selectLifeline: (id: string | null) => void;
+  selectMessage: (id: string | null) => void;
+  selectedLifelineId: string | null;
+  selectedMessageId: string | null;
+
+  addLifeline: (x?: number) => void;
+  removeLifeline: (id: string) => void;
+  moveLifeline: (id: string, x: number) => void;
+  updateLifeline: (id: string, updates: Partial<SeqLifeline>) => void;
+
+  addMessage: (from: string, to: string) => void;
+  removeMessage: (id: string) => void;
+  updateMessage: (id: string, updates: Partial<SeqMessage>) => void;
+
+  // ── Grid ──────────────────────────────────────
+
   toggleGrid: () => void;
   setGridSize: (size: number) => void;
   setGridColor: (color: string) => void;
   setGridThickness: (thickness: number) => void;
   toggleSnapToGrid: () => void;
 
-  // View
+  // ── View ──────────────────────────────────────
+
   setZoom: (zoom: number) => void;
   setPan: (x: number, y: number) => void;
 
-  // Undo/Redo
+  // ── Undo/Redo ─────────────────────────────────
+
   undo: () => void;
   redo: () => void;
   pushSnapshot: (operation: string) => void;
   clearHistory: () => void;
 
-  // File
+  // ── File ──────────────────────────────────────
+
   setCurrentFilepath: (path: string | null) => void;
 }
 
+const _initialProject = createDefaultProject();
+
 export const useDiagramStore = create<DiagramState>((set, get) => ({
-  diagram: createDefaultDiagram(),
+  project: _initialProject,
+  diagram: _activeDiagram(_initialProject),
   selectedClassId: null,
   selectedRelationId: null,
+  selectedLifelineId: null,
+  selectedMessageId: null,
   isModified: false,
   currentFilepath: null,
   undoStack: [],
@@ -77,29 +139,129 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   maxHistorySteps: 50,
   mergeWindowMs: 500,
 
-  setDiagram: (diagram) => set({ diagram, isModified: false, currentFilepath: null }),
+  // ── Project actions ───────────────────────────────────
 
-  newDiagram: (name) => set({
-    diagram: createDefaultDiagram(name),
-    selectedClassId: null,
-    selectedRelationId: null,
-    isModified: false,
-    currentFilepath: null,
-    undoStack: [],
-    redoStack: [],
-  }),
+  setProject: (project) => {
+    console.debug('[Store] setProject:', project.name, project.diagrams.length, 'diagrams');
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      isModified: false,
+      undoStack: [],
+      redoStack: [],
+    });
+  },
+
+  newProject: (name) => {
+    const project = createDefaultProject(name);
+    console.debug('[Store] newProject:', project.name);
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      selectedClassId: null,
+      selectedRelationId: null,
+      isModified: false,
+      currentFilepath: null,
+      undoStack: [],
+      redoStack: [],
+    });
+  },
+
+  setActiveDiagram: (index) => {
+    const state = get();
+    console.debug('[Store] setActiveDiagram:', index);
+    if (index >= 0 && index < state.project.diagrams.length) {
+      set({
+        project: { ...state.project, active_diagram_index: index },
+        diagram: state.project.diagrams[index],
+        selectedClassId: null,
+        selectedRelationId: null,
+        selectedLifelineId: null,
+        selectedMessageId: null,
+        undoStack: [],
+        redoStack: [],
+      });
+    }
+  },
+
+  addDiagram: (type = 'class', name) => {
+    const state = get();
+    const newD = createDefaultDiagram(name || `${type}_${state.project.diagrams.length + 1}`);
+    newD.diagram_type = type;
+    const diagrams = [...state.project.diagrams, newD];
+    console.debug('[Store] addDiagram:', type, newD.name, '→', diagrams.length, 'total');
+    set({
+      project: {
+        ...state.project,
+        diagrams,
+        active_diagram_index: diagrams.length - 1,
+      },
+      diagram: newD,
+      selectedClassId: null,
+      selectedRelationId: null,
+      isModified: true,
+      undoStack: [],
+      redoStack: [],
+    });
+  },
+
+  removeDiagram: (index) => {
+    const state = get();
+    if (state.project.diagrams.length <= 1) return; // keep at least 1
+    const diagrams = state.project.diagrams.filter((_, i) => i !== index);
+    const newIdx = Math.min(index, diagrams.length - 1);
+    console.debug('[Store] removeDiagram:', index, '→', diagrams.length, 'remaining');
+    set({
+      project: {
+        ...state.project,
+        diagrams,
+        active_diagram_index: newIdx,
+      },
+      diagram: diagrams[newIdx],
+      isModified: true,
+      undoStack: [],
+      redoStack: [],
+    });
+  },
+
+  // ── Legacy diagram actions ────────────────────────────
+
+  setDiagram: (diagram) => {
+    console.debug('[Store] setDiagram: updating active diagram', diagram.name);
+    const project = _updateActiveDiagram(get().project, () => diagram);
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  newDiagram: (name) => {
+    console.debug('[Store] newDiagram (legacy):', name);
+    const project = createDefaultProject(name);
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      selectedClassId: null,
+      selectedRelationId: null,
+      isModified: false,
+      currentFilepath: null,
+      undoStack: [],
+      redoStack: [],
+    });
+  },
 
   markModified: () => set({ isModified: true }),
+
+  // ── Class operations ──────────────────────────────────
 
   addClass: (position) => {
     const state = get();
     const newClass = createDefaultClass(position);
     get().pushSnapshot('add_class');
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      classes: [...d.classes, newClass],
+    }));
     set({
-      diagram: {
-        ...state.diagram,
-        classes: [...state.diagram.classes, newClass],
-      },
+      project,
+      diagram: _activeDiagram(project),
       selectedClassId: newClass.id,
       selectedRelationId: null,
       isModified: true,
@@ -109,14 +271,14 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   removeClass: (id) => {
     const state = get();
     get().pushSnapshot('remove_class');
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      classes: d.classes.filter((c) => c.id !== id),
+      relations: d.relations.filter((r) => r.source !== id && r.target !== id),
+    }));
     set({
-      diagram: {
-        ...state.diagram,
-        classes: state.diagram.classes.filter((c) => c.id !== id),
-        relations: state.diagram.relations.filter(
-          (r) => r.source !== id && r.target !== id
-        ),
-      },
+      project,
+      diagram: _activeDiagram(project),
       selectedClassId: state.selectedClassId === id ? null : state.selectedClassId,
       isModified: true,
     });
@@ -125,63 +287,52 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   updateClass: (id, updates) => {
     const state = get();
     get().pushSnapshot('update_class');
-    set({
-      diagram: {
-        ...state.diagram,
-        classes: state.diagram.classes.map((c) =>
-          c.id === id ? { ...c, ...updates } : c
-        ),
-      },
-      isModified: true,
-    });
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      classes: d.classes.map((c) => (c.id === id ? { ...c, ...updates } : c)),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
   },
 
   moveClass: (id, position) => {
     const state = get();
     const now = Date.now();
-    // Merge with previous move if within window
     if (state.lastOperationTime && (now - state.lastOperationTime) < state.mergeWindowMs) {
-      get().redoStack.pop(); // Remove last redo entry
+      get().redoStack.pop();
     } else {
       get().pushSnapshot('move_class');
     }
-    set({
-      diagram: {
-        ...state.diagram,
-        classes: state.diagram.classes.map((c) =>
-          c.id === id ? { ...c, position } : c
-        ),
-      },
-      lastOperationTime: now,
-      isModified: true,
-    });
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      classes: d.classes.map((c) => (c.id === id ? { ...c, position } : c)),
+    }));
+    set({ project, diagram: _activeDiagram(project), lastOperationTime: now, isModified: true });
   },
 
   resizeClass: (id, size) => {
-    const state = get();
     get().pushSnapshot('resize_class');
-    set({
-      diagram: {
-        ...state.diagram,
-        classes: state.diagram.classes.map((c) =>
-          c.id === id ? { ...c, size } : c
-        ),
-      },
-      isModified: true,
-    });
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      classes: d.classes.map((c) => (c.id === id ? { ...c, size } : c)),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
   },
 
   selectClass: (id) => set({ selectedClassId: id, selectedRelationId: null }),
+
+  // ── Relation operations ────────────────────────────────
 
   addRelation: (source, target) => {
     const state = get();
     const newRel = createDefaultRelation(source, target);
     get().pushSnapshot('add_relation');
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      relations: [...d.relations, newRel],
+    }));
     set({
-      diagram: {
-        ...state.diagram,
-        relations: [...state.diagram.relations, newRel],
-      },
+      project,
+      diagram: _activeDiagram(project),
       selectedRelationId: newRel.id,
       selectedClassId: null,
       isModified: true,
@@ -191,66 +342,179 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   removeRelation: (id) => {
     const state = get();
     get().pushSnapshot('remove_relation');
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      relations: d.relations.filter((r) => r.id !== id),
+    }));
     set({
-      diagram: {
-        ...state.diagram,
-        relations: state.diagram.relations.filter((r) => r.id !== id),
-      },
+      project,
+      diagram: _activeDiagram(project),
       selectedRelationId: state.selectedRelationId === id ? null : state.selectedRelationId,
       isModified: true,
     });
   },
 
   updateRelation: (id, updates) => {
-    const state = get();
     get().pushSnapshot('update_relation');
-    set({
-      diagram: {
-        ...state.diagram,
-        relations: state.diagram.relations.map((r) =>
-          r.id === id ? { ...r, ...updates } : r
-        ),
-      },
-      isModified: true,
-    });
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      relations: d.relations.map((r) => (r.id === id ? { ...r, ...updates } : r)),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
   },
 
   selectRelation: (id) => set({ selectedRelationId: id, selectedClassId: null }),
 
-  toggleGrid: () => {
+  // ── Sequence diagram operations ────────────────────────
+
+  selectLifeline: (id) => set({ selectedLifelineId: id, selectedMessageId: null }),
+  selectMessage: (id) => set({ selectedMessageId: id, selectedLifelineId: null }),
+
+  addLifeline: (x) => {
+    const lifeline = createDefaultLifeline(x);
+    get().pushSnapshot('add_lifeline');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      lifelines: [...(d.lifelines || []), lifeline],
+    }));
+    console.debug('[Store] addLifeline:', lifeline.name, lifeline.id);
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      selectedLifelineId: lifeline.id,
+      isModified: true,
+    });
+  },
+
+  removeLifeline: (id) => {
+    get().pushSnapshot('remove_lifeline');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      lifelines: (d.lifelines || []).filter((l) => l.id !== id),
+      messages: (d.messages || []).filter(
+        (m) => m.from_lifeline !== id && m.to_lifeline !== id
+      ),
+    }));
+    console.debug('[Store] removeLifeline:', id);
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      selectedLifelineId: get().selectedLifelineId === id ? null : get().selectedLifelineId,
+      isModified: true,
+    });
+  },
+
+  moveLifeline: (id, x) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      lifelines: (d.lifelines || []).map((l) => (l.id === id ? { ...l, x } : l)),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  updateLifeline: (id, updates) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      lifelines: (d.lifelines || []).map((l) =>
+        l.id === id ? { ...l, ...updates } : l
+      ),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  addMessage: (from, to) => {
     const state = get();
-    set({ diagram: { ...state.diagram, grid_visible: !state.diagram.grid_visible } });
+    const order = (state.diagram.messages?.length || 0) + 1;
+    const y = 150 + order * 40;  // LIFELINE_Y(120) + 30 + order*40
+    const msg = createDefaultMessage(from, to, order, y);
+    get().pushSnapshot('add_message');
+    const project = _updateActiveDiagram(state.project, (d) => ({
+      ...d,
+      messages: [...(d.messages || []), msg],
+    }));
+    console.debug('[Store] addMessage:', msg.label, from, '→', to);
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      selectedMessageId: msg.id,
+      isModified: true,
+    });
+  },
+
+  removeMessage: (id) => {
+    get().pushSnapshot('remove_message');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      messages: (d.messages || []).filter((m) => m.id !== id),
+    }));
+    console.debug('[Store] removeMessage:', id);
+    set({
+      project,
+      diagram: _activeDiagram(project),
+      selectedMessageId: get().selectedMessageId === id ? null : get().selectedMessageId,
+      isModified: true,
+    });
+  },
+
+  updateMessage: (id, updates) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      messages: (d.messages || []).map((m) =>
+        m.id === id ? { ...m, ...updates } : m
+      ),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  // ── Grid ──────────────────────────────────────────────
+
+  toggleGrid: () => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      grid_visible: !d.grid_visible,
+    }));
+    set({ project, diagram: _activeDiagram(project) });
   },
 
   setGridSize: (size) => {
-    const state = get();
-    set({ diagram: { ...state.diagram, grid_size: size } });
+    const project = _updateActiveDiagram(get().project, (d) => ({ ...d, grid_size: size }));
+    set({ project, diagram: _activeDiagram(project) });
   },
 
   setGridColor: (color) => {
-    const state = get();
-    set({ diagram: { ...state.diagram, grid_color: color } });
+    const project = _updateActiveDiagram(get().project, (d) => ({ ...d, grid_color: color }));
+    set({ project, diagram: _activeDiagram(project) });
   },
 
   setGridThickness: (thickness) => {
-    const state = get();
-    set({ diagram: { ...state.diagram, grid_thickness: thickness } });
+    const project = _updateActiveDiagram(get().project, (d) => ({ ...d, grid_thickness: thickness }));
+    set({ project, diagram: _activeDiagram(project) });
   },
 
   toggleSnapToGrid: () => {
-    const state = get();
-    set({ diagram: { ...state.diagram, snap_to_grid: !state.diagram.snap_to_grid } });
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      snap_to_grid: !d.snap_to_grid,
+    }));
+    set({ project, diagram: _activeDiagram(project) });
   },
 
+  // ── View ──────────────────────────────────────────────
+
   setZoom: (zoom) => {
-    const state = get();
-    set({ diagram: { ...state.diagram, zoom: Math.max(0.1, Math.min(5, zoom)) } });
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      zoom: Math.max(0.1, Math.min(5, zoom)),
+    }));
+    set({ project, diagram: _activeDiagram(project) });
   },
 
   setPan: (x, y) => {
-    const state = get();
-    set({ diagram: { ...state.diagram, pan_x: x, pan_y: y } });
+    const project = _updateActiveDiagram(get().project, (d) => ({ ...d, pan_x: x, pan_y: y }));
+    set({ project, diagram: _activeDiagram(project) });
   },
+
+  // ── Undo/Redo ─────────────────────────────────────────
 
   pushSnapshot: (_operation) => {
     const state = get();
@@ -272,8 +536,10 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     const newUndo = [...state.undoStack];
     const target = newUndo.pop()!;
     const newRedo = [...state.redoStack, currentSnapshot];
+    const project = _updateActiveDiagram(state.project, () => target.diagram);
     set({
-      diagram: target.diagram,
+      project,
+      diagram: _activeDiagram(project),
       undoStack: newUndo,
       redoStack: newRedo,
       isModified: true,
@@ -290,8 +556,10 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     const newRedo = [...state.redoStack];
     const target = newRedo.pop()!;
     const newUndo = [...state.undoStack, currentSnapshot];
+    const project = _updateActiveDiagram(state.project, () => target.diagram);
     set({
-      diagram: target.diagram,
+      project,
+      diagram: _activeDiagram(project),
       undoStack: newUndo,
       redoStack: newRedo,
       isModified: true,

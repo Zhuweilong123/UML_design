@@ -71,11 +71,19 @@ export interface UmlRelation {
   note: string;
 }
 
+import type { SeqLifeline, SeqMessage } from './sequence';
+
 export interface UmlDiagram {
   version: string;
   name: string;
+  diagram_type?: string;  // "class" | "sequence" | "component"
+  // Class diagram
   classes: UmlClass[];
   relations: UmlRelation[];
+  // Sequence diagram
+  lifelines?: SeqLifeline[];
+  messages?: SeqMessage[];
+  // View
   grid_visible: boolean;
   grid_size: number;
   grid_color: string;
@@ -90,8 +98,11 @@ export function createDefaultDiagram(name = 'Untitled'): UmlDiagram {
   return {
     version: '1.0',
     name,
+    diagram_type: 'class',
     classes: [],
     relations: [],
+    lifelines: [],
+    messages: [],
     grid_visible: true,
     grid_size: 20,
     grid_color: '#e0e0e0',
@@ -126,5 +137,23 @@ export function createDefaultRelation(source: string, target: string): UmlRelati
     multiplicity_target: '',
     role_name: '',
     note: '',
+  };
+}
+
+// ── Project (multi-diagram container) ─────────────────
+
+export interface Project {
+  version: string;
+  name: string;
+  diagrams: UmlDiagram[];
+  active_diagram_index: number;
+}
+
+export function createDefaultProject(name = 'Untitled'): Project {
+  return {
+    version: '1.0',
+    name,
+    diagrams: [createDefaultDiagram(name)],
+    active_diagram_index: 0,
   };
 }

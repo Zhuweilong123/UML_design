@@ -1,18 +1,22 @@
 """File operations API – new, open, save, export, browse, review."""
 
+import logging
 import os
 from datetime import datetime
 from pydantic import BaseModel
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
 
-from app.models.uml import UmlDiagram, ExportRequest
+from app.models.uml import UmlDiagram, Project, create_default_project, ExportRequest
 from app.services.file_service import (
     save_diagram, load_diagram, list_diagrams, export_markdown,
+    save_project, load_project, list_projects,
 )
 from app.core.config import get_settings
 from app.core.auth import require_auth
 from app.core.security import safe_path, resolve_path, sanitize_path_segment
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -131,13 +135,14 @@ async def browse_directory(path: str = "", safe: bool = True):
         full = os.path.join(base, name)
         if os.path.isdir(full) and not name.startswith("."):
             dirs.append({"name": name, "path": full.replace("\\", "/")})
-        elif name.endswith(".uml"):
+        elif name.endswith(".uml") or name.endswith(".umlproj"):
             stat = os.stat(full)
             files.append({
                 "name": name,
                 "path": full.replace("\\", "/"),
                 "size": stat.st_size,
                 "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "type": "project" if name.endswith(".umlproj") else "diagram",
             })
 
     # Parent navigation: always allowed when unrestricted; checked when restricted
@@ -278,3 +283,60 @@ async def list_generated_code():
         "test": list_dir(os.path.join(base, "test")),
         "base": base.replace("\\", "/"),
     }
+
+
+# ── Project operations (.umlproj) ────────────────────────
+
+
+@router.post("/save-project", dependencies=[Depends(require_auth)])
+async def save_project_endpoint(project: Project, filename: str = ""):
+    """Save a Project to a .umlproj file.
+
+    If filename looks like a full path (contains : or /), use it directly after
+    path-safety validation.  Otherwise treat it as a short name in uml_dir.
+    """
+    filepath = None
+    if filename:
+        if ':' in filename or '/' in filename or '\\' in filename:
+            # Full path — validate and use directly
+            try:
+                safe_path(filename)
+                filepath = filename
+            except Exception:
+                raise HTTPException(status_code=403, detail="Invalid file path")
+        else:
+            safe_name = sanitize_path_segment(filename.replace(".umlproj", ""))
+            if safe_name:
+                safe_name += ".umlproj"
+                filepath = os.path.join(get_settings().uml_dir, safe_name)
+    try:
+        filepath = save_project(project, filepath)
+        logger.info(f"[API] Project saved: {filepath}")
+        return {"success": True, "filepath": filepath, "filename": os.path.basename(filepath)}
+    except Exception as e:
+        logger.error(f"[API] Failed to save project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/open-project")
+async def open_project(filepath: str):
+    """Open a .umlproj (or legacy .uml) file as a Project."""
+    try:
+        safe_path(filepath)  # validate path
+    except HTTPException:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        project = load_project(filepath)
+        logger.info(f"[API] Project opened: {project.name} ({len(project.diagrams)} diagrams)")
+        return {"project": project.model_dump()}
+    except Exception as e:
+        logger.error(f"[API] Failed to open project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/list-projects")
+async def list_projects_endpoint():
+    """List all saved .umlproj project files."""
+    return {"projects": list_projects()}

@@ -1,5 +1,5 @@
 /**
- * Property Panel – edit properties of selected class or relation.
+ * Property Panel – edit properties of selected class, relation, or lifeline.
  */
 
 import React, { useEffect } from 'react';
@@ -15,6 +15,7 @@ import {
   Visibility, Stereotype, RelationType,
   type UmlAttribute, type UmlMethod,
 } from '../../types/uml';
+import { MESSAGE_TYPE_LABELS } from '../../types/sequence';
 import './PropertyPanel.css';
 
 const { TextArea } = Input;
@@ -22,11 +23,16 @@ const { TextArea } = Input;
 const PropertyPanel: React.FC = () => {
   const {
     diagram, selectedClassId, selectedRelationId,
+    selectedLifelineId, selectedMessageId,
     updateClass, removeClass, updateRelation, removeRelation,
+    updateLifeline, removeLifeline,
+    updateMessage, removeMessage,
   } = useDiagramStore();
 
   const selectedClass = diagram.classes.find((c) => c.id === selectedClassId);
   const selectedRelation = diagram.relations.find((r) => r.id === selectedRelationId);
+  const selectedLifeline = (diagram.lifelines || []).find((l) => l.id === selectedLifelineId);
+  const selectedMessage = (diagram.messages || []).find((m) => m.id === selectedMessageId);
 
   // ── Class Property Editor ──────────────────────────
   if (selectedClass) {
@@ -309,6 +315,105 @@ const PropertyPanel: React.FC = () => {
             />
           </Form.Item>
         </Form>
+      </div>
+    );
+  }
+
+  // ── Message Property Editor ───────────────────────────
+  if (selectedMessage) {
+    const srcName = (diagram.lifelines || []).find((l) => l.id === selectedMessage.from_lifeline)?.name || '?';
+    const tgtName = (diagram.lifelines || []).find((l) => l.id === selectedMessage.to_lifeline)?.name || '?';
+
+    return (
+      <div className="property-panel">
+        <div className="property-panel-header">
+          <h3>消息属性</h3>
+          <Popconfirm
+            title="确认删除此消息？"
+            onConfirm={() => removeMessage(selectedMessage.id)}
+            okText="删除" cancelText="取消"
+          >
+            <Button danger size="small" icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </div>
+
+        <div className="relation-summary">{srcName} → {tgtName}</div>
+
+        <Form layout="vertical" size="small">
+          <Form.Item label="方法名">
+            <Input
+              value={selectedMessage.label}
+              onChange={(e) => updateMessage(selectedMessage.id, { label: e.target.value })}
+            />
+          </Form.Item>
+          <Form.Item label="消息类型">
+            <Select
+              value={selectedMessage.type}
+              onChange={(v) => updateMessage(selectedMessage.id, { type: v })}
+              options={[
+                { value: 'sync', label: '→ 同步消息' },
+                { value: 'async', label: '⇢ 异步消息' },
+                { value: 'return', label: '-->> 返回消息' },
+                { value: 'simple', label: '→ 简单消息' },
+                { value: 'self', label: '↻ 自反消息' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="功能备注">
+            <Input.TextArea
+              value={selectedMessage.note || ''}
+              onChange={(e) => updateMessage(selectedMessage.id, { note: e.target.value })}
+              rows={2}
+              placeholder="描述此消息的业务含义..."
+            />
+          </Form.Item>
+        </Form>
+      </div>
+    );
+  }
+
+  // ── Lifeline Property Editor ─────────────────────────
+  if (selectedLifeline) {
+    const handleChange = (field: string, value: unknown) => {
+      updateLifeline(selectedLifeline.id, { [field]: value });
+    };
+
+    return (
+      <div className="property-panel">
+        <div className="property-panel-header">
+          <h3>生命线属性</h3>
+          <Popconfirm
+            title="确认删除此生命线？关联的消息也会被删除"
+            onConfirm={() => removeLifeline(selectedLifeline.id)}
+            okText="删除" cancelText="取消"
+          >
+            <Button danger size="small" icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </div>
+
+        <Form layout="vertical" size="small">
+          <Form.Item label="名称">
+            <Input
+              value={selectedLifeline.name}
+              onChange={(e) => handleChange('name', e.target.value)}
+              placeholder="如: ota: OtaTask"
+            />
+          </Form.Item>
+          <Form.Item label="关联类（可选）">
+            <Input
+              value={selectedLifeline.class_ref || ''}
+              onChange={(e) => handleChange('class_ref', e.target.value)}
+              placeholder="UML 类图中类的名称"
+            />
+          </Form.Item>
+        </Form>
+
+        <Divider orientation="left" plain style={{ fontSize: 12 }}>
+          激活条 ({selectedLifeline.activations?.length || 0} 个)
+        </Divider>
+        <p style={{ fontSize: 11, color: '#888' }}>
+          激活条在创建消息时自动添加。删除消息不会自动移除激活条（可手动清理）。
+        </p>
       </div>
     );
   }

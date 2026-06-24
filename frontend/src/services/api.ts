@@ -1,7 +1,7 @@
 /** API service – communicates with the FastAPI backend. */
 
 import axios from 'axios';
-import type { UmlDiagram } from '../types/uml';
+import type { UmlDiagram, Project } from '../types/uml';
 import type { PipelineState } from '../types/pipeline';
 
 // Read auth token from Vite env var (VITE_API_TOKEN in .env.local)
@@ -152,7 +152,7 @@ export interface BrowseResult {
   parent: string;
   dirs: Array<{ name: string; path: string }>;
   files: Array<{
-    name: string; path: string; size: number; modified: string;
+    name: string; path: string; size: number; modified: string; type?: string;
   }>;
 }
 
@@ -242,4 +242,26 @@ export async function saveReview(review: {
 }): Promise<{ success: boolean; file: string }> {
   const { data } = await api.post('/files/save-review', review);
   return data;
+}
+
+// ─── Project (.umlproj) ─────────────────────────────────
+
+export async function saveProject(project: Project, filename?: string): Promise<{
+  success: boolean; filepath: string; filename: string;
+}> {
+  const params = filename ? `?filename=${encodeURIComponent(filename)}` : '';
+  const { data } = await api.post(`/files/save-project${params}`, project);
+  return data;
+}
+
+export async function openProject(filepath: string): Promise<Project> {
+  const { data } = await api.get('/files/open-project', { params: { filepath } });
+  return data.project;
+}
+
+export async function listProjects(): Promise<Array<{
+  name: string; path: string; size: number; modified: string;
+}>> {
+  const { data } = await api.get('/files/list-projects');
+  return data.projects;
 }

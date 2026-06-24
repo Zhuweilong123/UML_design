@@ -99,7 +99,8 @@ const DiffViewer: React.FC = () => {
   const handleContinueOptimize = async () => {
     if (!originalDiagram) return;
     setReoptimizing(true);
-    message.loading({ content: 'LLM 正在重新优化 UML...', key: 'reoptimize' });
+    const dt = originalDiagram?.diagram_type || 'class';
+    message.loading({ content: dt === 'sequence' ? 'LLM 正在重新优化时序图...' : 'LLM 正在重新优化 UML...', key: 'reoptimize' });
     try {
       const result = await apiOptimizeUml(originalDiagram, rejectInstructions);
       // Save the reject review first
@@ -166,7 +167,9 @@ const DiffViewer: React.FC = () => {
       optFormatted = JSON.stringify(JSON.parse(opt), null, 2);
     } catch {}
 
-    return Diff.createPatch('UML Diagram', origFormatted, optFormatted,
+    const dt = originalDiagram?.diagram_type || 'class';
+    const diagramLabel = dt === 'sequence' ? 'Sequence Diagram' : 'UML Diagram';
+    return Diff.createPatch(diagramLabel, origFormatted, optFormatted,
       'Original', 'Optimized');
   }, [originalCode, optimizedCode]);
 
@@ -174,7 +177,7 @@ const DiffViewer: React.FC = () => {
     return (
       <div className="diff-viewer">
         <Empty description="暂无对比数据" image={Empty.PRESENTED_IMAGE_SIMPLE}>
-          <p>使用"优化设计"功能生成 UML 优化对比</p>
+          <p>使用"优化设计"功能生成设计优化对比</p>
         </Empty>
       </div>
     );
@@ -186,7 +189,7 @@ const DiffViewer: React.FC = () => {
     <div className="diff-viewer">
       {/* Header with toggle */}
       <div className="diff-header">
-        <h3>UML 优化对比</h3>
+        <h3>{originalDiagram?.diagram_type === 'sequence' ? '时序图优化对比' : 'UML 优化对比'}</h3>
         <Button
           icon={<SwapOutlined />}
           size="small"
