@@ -243,9 +243,12 @@ const Toolbar: React.FC = () => {
     const dt = diagram.diagram_type || 'class';
     const data = dt === 'sequence'
       ? (diagram.lifelines || [])
+      : dt === 'component'
+      ? (diagram.components || [])
       : diagram.classes;
     if (!data.length) {
-      message.warning(dt === 'sequence' ? '请先添加生命线到时序图中' : '请先添加类到图表中');
+      const hint = dt === 'sequence' ? '生命线' : dt === 'component' ? '组件' : '类';
+      message.warning(`请先添加${hint}到${dt === 'component' ? '组件图' : dt === 'sequence' ? '时序图' : '图表'}中`);
       return;
     }
     setOptimizeInstructions('');
@@ -255,7 +258,8 @@ const Toolbar: React.FC = () => {
   const handleOptimizeConfirm = async () => {
     setOptimizing(true);
     const dt = diagram.diagram_type || 'class';
-    message.loading({ content: dt === 'sequence' ? 'LLM 正在分析优化时序图...' : 'LLM 正在分析优化 UML...', key: 'optimize' });
+    const loadText = dt === 'sequence' ? 'LLM 正在分析优化时序图...' : dt === 'component' ? 'LLM 正在分析优化组件图...' : 'LLM 正在分析优化 UML...';
+    message.loading({ content: loadText, key: 'optimize' });
     try {
       const result = await apiOptimizeUml(diagram, optimizeInstructions);
       setOptimizationResult(result.original, result.optimized, result.changes_summary, optimizeInstructions);
@@ -574,7 +578,7 @@ const Toolbar: React.FC = () => {
 
       {/* ── Optimize UML Dialog ──────────────────────── */}
       <Modal
-        title={diagram.diagram_type === 'sequence' ? '时序图优化' : 'UML 设计优化'}
+        title={diagram.diagram_type === 'sequence' ? '时序图优化' : diagram.diagram_type === 'component' ? '组件图优化' : 'UML 设计优化'}
         open={optimizeVisible}
         onCancel={() => setOptimizeVisible(false)}
         onOk={handleOptimizeConfirm}
@@ -586,6 +590,8 @@ const Toolbar: React.FC = () => {
         <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
           {diagram.diagram_type === 'sequence'
             ? <>当前时序图包含 <strong>{(diagram.lifelines || []).length}</strong> 个生命线，<strong>{(diagram.messages || []).length}</strong> 条消息。</>
+            : diagram.diagram_type === 'component'
+            ? <>当前组件图包含 <strong>{(diagram.components || []).length}</strong> 个组件，<strong>{(diagram.comp_relations || []).length}</strong> 条依赖。</>
             : <>当前类图包含 <strong>{diagram.classes.length}</strong> 个类，<strong>{diagram.relations.length}</strong> 条关系。</>
           }
           请输入你的优化需求，LLM 将结合当前设计和你的需求进行优化：
@@ -595,6 +601,8 @@ const Toolbar: React.FC = () => {
           onChange={(e) => setOptimizeInstructions(e.target.value)}
           placeholder={diagram.diagram_type === 'sequence'
             ? '例如：\n• 为OtaTask和CrowTask之间增加异常处理消息\n• 补充缺失的返回消息\n• 调整消息调用顺序使其更合理\n• 为关键消息添加功能备注\n...'
+            : diagram.diagram_type === 'component'
+            ? '例如：\n• 将AuthService拆分为AuthProvider和TokenManager\n• 为DataModule补充ILogger依赖接口\n• 检查组件间的循环依赖\n• 为PaymentGateway增加提供的IPayment接口\n...'
             : '例如：\n• 将User和Order改为聚合关系\n• 为Payment添加refund方法\n• 提取公共接口IPayable\n• 优化类的职责划分，减少耦合\n• 应用工厂模式改造创建逻辑\n...'}
           rows={6}
           autoFocus

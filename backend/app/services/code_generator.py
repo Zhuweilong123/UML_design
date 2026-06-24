@@ -339,6 +339,16 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 6. PRESERVE all "note" and "class_ref" fields"""
         default_inst = "优化时序图交互流程：检查遗漏/多余消息、调用顺序合理性、消息命名准确性"
         system = "You are an expert software architect specializing in UML sequence diagrams and interaction design."
+    elif dt == "component":
+        type_hint = "component diagram with components and dependencies"
+        rules = """CRITICAL RULES:
+1. Use EXACTLY the same JSON field names and structure as the input.
+2. components: "id", "name", "x", "y", "width", "height", "parent_id", "provided_interfaces", "required_interfaces"
+4. comp_relations: "id", "source", "target", "type" (dependency|delegation)
+5. Every component and relation MUST have a unique "id"
+6. PRESERVE all "provided_interfaces" and "required_interfaces" lists"""
+        default_inst = "优化组件架构：检查组件职责划分、依赖关系合理性、接口设计完整性"
+        system = "You are an expert software architect specializing in UML component diagrams and system architecture."
     else:
         type_hint = "UML class diagram"
         rules = """CRITICAL RULES:
