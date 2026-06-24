@@ -234,8 +234,12 @@ metadata:
 | F36 | Ctrl+S 保存 | 前端 |
 | F37 | .umlproj 文件浏览/保存/打开 | 存储 |
 | F38 | Stage 7 轮间记忆 + 僵化退出 | 流水线 |
+| F39 | 组件图编辑器 (X6) | 编辑器 |
+| F40 | 组件嵌套（父子 embedding） | 组件图 |
+| F41 | Ctrl+C/V 元素复制粘贴 | 编辑器 |
+| F42 | 三种图统一网格控制 | 编辑器 |
 
-**总计: 38 项功能迭代**
+**总计: 42 项功能迭代**
 
 ---
 
@@ -429,3 +433,41 @@ metadata:
   - 上下文传入下一轮 LLM prompt，提示"上次修了还失败请换方法"
   - 僵化检测：同一组失败持续 2 轮无变化 → 提前退出，提示用户人工审查
 - **关键文件**: `backend/app/services/pipeline_service.py`
+
+---
+
+## F39 - 组件图编辑器 (X6)
+
+- **描述**:
+  - 新建 `CompEditor.tsx`，第三种图类型编辑器
+  - X6 `comp-component` 自定义节点（橙黄色矩形 + `«component»` + 提供/依赖接口列表）
+  - 虚线箭头表示依赖关系
+  - 复用类图编辑器的 sync/event/isInternalUpdate 模式
+- **关键文件**: `frontend/src/components/Canvas/CompEditor.tsx`, `CompEditor.css`
+
+---
+
+## F40 - 组件嵌套（父子 embedding）
+
+- **描述**:
+  - `CompNode` 新增 `parent_id`、`width`、`height`，X6 embedding 实现嵌套
+  - 双击空白 → 顶层组件，双击组件内部 → 子组件
+  - 子组件白底虚线边框，拖动父组件时子跟随，尺寸可拖拽持久化
+- **关键文件**: `frontend/src/components/Canvas/CompEditor.tsx`, `frontend/src/types/component.ts`
+
+---
+
+## F41 - Ctrl+C/V 元素复制粘贴
+
+- **描述**:
+  - 三个编辑器统一 Ctrl+C/V，偏移 30px 粘贴，自动保留尺寸/属性/接口/备注
+- **关键文件**: `frontend/src/components/Canvas/UMLEditor.tsx`, `SeqEditor.tsx`, `CompEditor.tsx`
+
+---
+
+## F42 - 三种图统一网格控制
+
+- **描述**:
+  - SeqEditor/CompEditor 读取 diagram 网格参数 + grid sync effect
+  - 工具栏网格开关/设置对三种图统一生效
+- **关键文件**: `frontend/src/components/Canvas/SeqEditor.tsx`, `CompEditor.tsx`
