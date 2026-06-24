@@ -179,11 +179,12 @@ const UMLEditor: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
   const isInternalUpdate = useRef(false);
+  const clipboard = useRef<{ classes: any[]; relations: any[] }>({ classes: [], relations: [] });
 
   const {
     diagram, selectedClassId,
     moveClass, resizeClass, selectClass, selectRelation,
-    addRelation, removeClass, removeRelation,
+    addRelation, removeClass, removeRelation, addClass,
     undo, redo,
   } = useDiagramStore();
 
@@ -309,7 +310,38 @@ const UMLEditor: React.FC = () => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+      if (e.ctrlKey && e.key === 'c') {
+        // Copy selected class
+        if (store.selectedClassId) {
+          const cls = store.diagram.classes.find((c) => c.id === store.selectedClassId);
+          if (cls) {
+            clipboard.current = { classes: [JSON.parse(JSON.stringify(cls))], relations: [] };
+            console.log('[UMLEditor] Copied:', cls.name);
+          }
+        }
+      } else if (e.ctrlKey && e.key === 'v') {
+        // Paste copied classes at offset position with same size
+        clipboard.current.classes.forEach((cls: any) => {
+          const newId = `class_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          store.addClass({ x: cls.position.x + 30, y: cls.position.y + 30 });
+          // Apply copied size, attributes, methods
+          const store2 = useDiagramStore.getState();
+          const lastAdded = store2.diagram.classes[store2.diagram.classes.length - 1];
+          if (lastAdded) {
+            store2.updateClass(lastAdded.id, {
+              name: cls.name,
+              size: { ...cls.size },
+              attributes: [...cls.attributes],
+              methods: [...cls.methods],
+              stereotype: cls.stereotype,
+              note: cls.note,
+            });
+          }
+        });
+        clipboard.current = { classes: clipboard.current.classes.map((c: any) => ({
+          ...c, position: { x: c.position.x + 30, y: c.position.y + 30 }
+        })), relations: [] };
+      } else if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         store.undo();
       } else if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {

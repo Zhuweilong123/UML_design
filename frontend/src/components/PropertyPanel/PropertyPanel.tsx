@@ -24,15 +24,18 @@ const PropertyPanel: React.FC = () => {
   const {
     diagram, selectedClassId, selectedRelationId,
     selectedLifelineId, selectedMessageId,
+    selectedComponentId,
     updateClass, removeClass, updateRelation, removeRelation,
     updateLifeline, removeLifeline,
     updateMessage, removeMessage,
+    updateComponent, removeComponent,
   } = useDiagramStore();
 
   const selectedClass = diagram.classes.find((c) => c.id === selectedClassId);
   const selectedRelation = diagram.relations.find((r) => r.id === selectedRelationId);
   const selectedLifeline = (diagram.lifelines || []).find((l) => l.id === selectedLifelineId);
   const selectedMessage = (diagram.messages || []).find((m) => m.id === selectedMessageId);
+  const selectedComponent = (diagram.components || []).find((c) => c.id === selectedComponentId);
 
   // ── Class Property Editor ──────────────────────────
   if (selectedClass) {
@@ -414,6 +417,45 @@ const PropertyPanel: React.FC = () => {
         <p style={{ fontSize: 11, color: '#888' }}>
           激活条在创建消息时自动添加。删除消息不会自动移除激活条（可手动清理）。
         </p>
+      </div>
+    );
+  }
+
+  // ── Component Property Editor ────────────────────────
+  if (selectedComponent) {
+    const handleChange = (field: string, value: unknown) => {
+      updateComponent(selectedComponent.id, { [field]: value });
+    };
+
+    return (
+      <div className="property-panel">
+        <div className="property-panel-header">
+          <h3>组件属性</h3>
+          <Popconfirm title="确认删除此组件？" onConfirm={() => removeComponent(selectedComponent.id)}
+            okText="删除" cancelText="取消">
+            <Button danger size="small" icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </div>
+        <Form layout="vertical" size="small">
+          <Form.Item label="名称">
+            <Input value={selectedComponent.name}
+              onChange={(e) => handleChange('name', e.target.value)} />
+          </Form.Item>
+          <Form.Item label="提供的接口（每行一个）">
+            <Input.TextArea
+              value={(selectedComponent.provided_interfaces || []).join('\n')}
+              onChange={(e) => handleChange('provided_interfaces',
+                e.target.value.split('\n').filter((s: string) => s.trim()))}
+              rows={2} placeholder="IService&#10;IRepository" />
+          </Form.Item>
+          <Form.Item label="依赖的接口（每行一个）">
+            <Input.TextArea
+              value={(selectedComponent.required_interfaces || []).join('\n')}
+              onChange={(e) => handleChange('required_interfaces',
+                e.target.value.split('\n').filter((s: string) => s.trim()))}
+              rows={2} placeholder="IDatabase&#10;ILogger" />
+          </Form.Item>
+        </Form>
       </div>
     );
   }

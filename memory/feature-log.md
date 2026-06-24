@@ -225,8 +225,17 @@ metadata:
 | F27 | Stage 7 测试上下文感知 | 流水线 |
 | F28 | Stage 6 编译错误精确分类 | 流水线 |
 | F29 | 默认路径扁平化 | 后端 |
+| F30 | Project 多图容器 (.umlproj) | 架构 |
+| F31 | 时序图编辑器 (X6) | 编辑器 |
+| F32 | 5 种标准消息类型 | 时序图 |
+| F33 | 点击连线交互 | 时序图 |
+| F34 | 消息备注 + Y 位置持久化 | 时序图 |
+| F35 | 时序图 LLM 优化 | LLM |
+| F36 | Ctrl+S 保存 | 前端 |
+| F37 | .umlproj 文件浏览/保存/打开 | 存储 |
+| F38 | Stage 7 轮间记忆 + 僵化退出 | 流水线 |
 
-**总计: 29 项功能迭代**
+**总计: 38 项功能迭代**
 
 ---
 
@@ -325,4 +334,98 @@ metadata:
   - `_save_generated_files` 和 `_execute_tests` 默认路径从 `generated/{src,test}/{project}/{language}/` 改为 `generated/{src,test}/`
   - 与用户选择自定义目录时的扁平结构保持一致
   - 删除了所有旧嵌套目录残留
+- **关键文件**: `backend/app/services/pipeline_service.py`
+
+---
+
+## F30 - Project 多图容器 (.umlproj)
+
+- **描述**:
+  - 后端新增 `Project` 模型（name, diagrams[], active_diagram_index）
+  - `UmlDiagram` 新增 `diagram_type` 字段 + `lifelines`/`messages` 字段
+  - 前端 Store 重构为 project 驱动，通过 `_updateActiveDiagram` 路由所有操作
+  - 向下兼容：打开 `.uml` 自动包装为 1 张图的 Project
+  - `.umlproj` 文件格式支持保存/打开/浏览
+- **关键文件**: `backend/app/models/uml.py`, `frontend/src/stores/diagramStore.ts`, `frontend/src/types/uml.ts`
+
+---
+
+## F31 - 时序图编辑器 (X6)
+
+- **描述**:
+  - 新建 `SeqEditor.tsx` 组件，与 `UMLEditor` 并列
+  - X6 `seq-lifeline` 自定义节点（头部+虚线体）
+  - 复用 `isInternalUpdate` ref 模式、sync effect 模式、X6 插件
+  - App.tsx 根据 `diagram_type` 条件渲染，用 `key={activeIdx}` 强制重建
+  - 双击添加生命线，点击连线交互
+- **关键文件**: `frontend/src/components/Canvas/SeqEditor.tsx`, `frontend/src/components/Canvas/SeqEditor.css`, `frontend/src/App.tsx`
+
+---
+
+## F32 - 5 种标准消息类型
+
+- **描述**:
+  - 消息类型：同步(sync)、异步(async)、返回(return)、简单(simple)、自反(self)
+  - 不同线型和颜色区分（蓝色实线/灰色虚线/黑色实线等）
+  - PropertyPanel 消息编辑支持类型切换
+- **关键文件**: `frontend/src/types/sequence.ts`, `frontend/src/components/PropertyPanel/PropertyPanel.tsx`
+
+---
+
+## F33 - 点击连线交互
+
+- **描述**:
+  - 拖拽连线改为点击连线：点击生命线A→再点生命线B→创建A→B消息
+  - 同一生命线点击两次→自反消息
+  - 去掉端口圆点，选中生命线显示脉冲提示
+  - 连线方向根据点击顺序自动判断（左→右或右→左）
+- **关键文件**: `frontend/src/components/Canvas/SeqEditor.tsx`
+
+---
+
+## F34 - 消息备注 + Y 位置持久化
+
+- **描述**:
+  - `SeqMessage` 新增 `note`（功能备注）和 `y`（持久化 Y 坐标）字段
+  - 消息 Y 位置拖动后通过 `edge:change:source/target` 事件存回 store
+  - 重开/切换后优先用 `msg.y`，无则回退公式计算
+- **关键文件**: `frontend/src/types/sequence.ts`, `frontend/src/components/Canvas/SeqEditor.tsx`
+
+---
+
+## F35 - 时序图 LLM 优化
+
+- **描述**:
+  - `optimize_uml` 后端根据 `diagram_type` 切换 prompt 和校验规则
+  - Toolbar 优化弹窗标题/内容/placeholder 按类型动态切换
+  - DiffViewer 标题和提示按类型适配
+- **关键文件**: `backend/app/services/code_generator.py`, `frontend/src/components/Toolbar/Toolbar.tsx`, `frontend/src/components/DiffViewer/DiffViewer.tsx`
+
+---
+
+## F36 - Ctrl+S 保存
+
+- **描述**:
+  - Toolbar 增加全局 `keydown` 监听，`Ctrl+S` 触发保存
+  - 已保存过的项目覆盖原文件，新项目弹出另存为
+- **关键文件**: `frontend/src/components/Toolbar/Toolbar.tsx`
+
+---
+
+## F37 - .umlproj 文件浏览/保存/打开
+
+- **描述**:
+  - 后端 `browse_directory` 同时过滤 `.uml` 和 `.umlproj`，增加 `type` 字段
+  - 前端文件对话框按项目(📦)/单图(📄)分类展示
+  - 保存默认 `.umlproj`，另存为后缀和标题适配
+- **关键文件**: `backend/app/api/files.py`, `frontend/src/components/Toolbar/Toolbar.tsx`
+
+---
+
+## F38 - Stage 7 轮间记忆 + 僵化退出
+
+- **描述**:
+  - 每轮优化后自动生成上下文：本轮修复了哪些、仍失败哪些
+  - 上下文传入下一轮 LLM prompt，提示"上次修了还失败请换方法"
+  - 僵化检测：同一组失败持续 2 轮无变化 → 提前退出，提示用户人工审查
 - **关键文件**: `backend/app/services/pipeline_service.py`

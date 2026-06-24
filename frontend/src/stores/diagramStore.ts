@@ -5,6 +5,8 @@ import type { UmlDiagram, UmlClass, UmlRelation, Position, Size, Project } from 
 import { createDefaultDiagram, createDefaultClass, createDefaultRelation, createDefaultProject } from '../types/uml';
 import type { SeqLifeline, SeqMessage } from '../types/sequence';
 import { createDefaultLifeline, createDefaultMessage } from '../types/sequence';
+import type { CompNode, CompRelation } from '../types/component';
+import { createDefaultComponent, createDefaultCompRelation } from '../types/component';
 
 // Undo/Redo snapshot (per-diagram)
 interface Snapshot {
@@ -97,6 +99,22 @@ interface DiagramState {
   removeMessage: (id: string) => void;
   updateMessage: (id: string, updates: Partial<SeqMessage>) => void;
 
+  // ── Component diagram operations ──────────────
+
+  selectComponent: (id: string | null) => void;
+  selectCompRelation: (id: string | null) => void;
+  selectedComponentId: string | null;
+  selectedCompRelationId: string | null;
+
+  addComponent: (position?: { x: number; y: number }, parentId?: string) => void;
+  removeComponent: (id: string) => void;
+  moveComponent: (id: string, x: number, y: number) => void;
+  updateComponent: (id: string, updates: Partial<CompNode>) => void;
+
+  addCompRelation: (source: string, target: string) => void;
+  removeCompRelation: (id: string) => void;
+  updateCompRelation: (id: string, updates: Partial<CompRelation>) => void;
+
   // ── Grid ──────────────────────────────────────
 
   toggleGrid: () => void;
@@ -131,6 +149,8 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   selectedRelationId: null,
   selectedLifelineId: null,
   selectedMessageId: null,
+  selectedComponentId: null,
+  selectedCompRelationId: null,
   isModified: false,
   currentFilepath: null,
   undoStack: [],
@@ -178,6 +198,8 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
         selectedRelationId: null,
         selectedLifelineId: null,
         selectedMessageId: null,
+        selectedComponentId: null,
+        selectedCompRelationId: null,
         undoStack: [],
         redoStack: [],
       });
@@ -461,6 +483,92 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       ...d,
       messages: (d.messages || []).map((m) =>
         m.id === id ? { ...m, ...updates } : m
+      ),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  // ── Component diagram operations ───────────────────────
+
+  selectComponent: (id) => set({ selectedComponentId: id, selectedCompRelationId: null }),
+  selectCompRelation: (id) => set({ selectedCompRelationId: id, selectedComponentId: null }),
+
+  addComponent: (position, parentId = '') => {
+    const c = createDefaultComponent(position?.x, position?.y, parentId);
+    get().pushSnapshot('add_component');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      components: [...(d.components || []), c],
+    }));
+    console.log('[Store] addComponent:', c.name, c.id, parentId ? `(child of ${parentId})` : '');
+    set({ project, diagram: _activeDiagram(project), selectedComponentId: c.id, isModified: true });
+  },
+
+  removeComponent: (id) => {
+    get().pushSnapshot('remove_component');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      components: (d.components || []).filter((c) => c.id !== id),
+      comp_relations: (d.comp_relations || []).filter(
+        (r) => r.source !== id && r.target !== id
+      ),
+    }));
+    set({
+      project, diagram: _activeDiagram(project),
+      selectedComponentId: get().selectedComponentId === id ? null : get().selectedComponentId,
+      isModified: true,
+    });
+  },
+
+  moveComponent: (id, x, y) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      components: (d.components || []).map((c) =>
+        c.id === id ? { ...c, x, y } : c
+      ),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  updateComponent: (id, updates) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      components: (d.components || []).map((c) =>
+        c.id === id ? { ...c, ...updates } : c
+      ),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  addCompRelation: (source, target) => {
+    const rel = createDefaultCompRelation(source, target);
+    get().pushSnapshot('add_comp_relation');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      comp_relations: [...(d.comp_relations || []), rel],
+    }));
+    console.log('[Store] addCompRelation:', source, '→', target);
+    set({ project, diagram: _activeDiagram(project), selectedCompRelationId: rel.id, isModified: true });
+  },
+
+  removeCompRelation: (id) => {
+    get().pushSnapshot('remove_comp_relation');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      comp_relations: (d.comp_relations || []).filter((r) => r.id !== id),
+    }));
+    set({
+      project, diagram: _activeDiagram(project),
+      selectedCompRelationId: get().selectedCompRelationId === id ? null : get().selectedCompRelationId,
+      isModified: true,
+    });
+  },
+
+  updateCompRelation: (id, updates) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      comp_relations: (d.comp_relations || []).map((r) =>
+        r.id === id ? { ...r, ...updates } : r
       ),
     }));
     set({ project, diagram: _activeDiagram(project), isModified: true });

@@ -89,6 +89,7 @@ const SeqEditor: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
   const isInternalUpdate = useRef(false);
+  const clipboard = useRef<any>(null);
 
   const {
     diagram, project, selectedLifelineId, selectedMessageId,
@@ -104,12 +105,16 @@ const SeqEditor: React.FC = () => {
     if (!containerRef.current || graphRef.current) return;
     ensureShapesRegistered();
 
+    const d = useDiagramStore.getState().diagram;
     const graph = new Graph({
       container: containerRef.current,
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
       background: { color: '#fafafa' },
-      grid: { size: 20, visible: true, args: { color: '#e0e0e0', thickness: 1 } },
+      grid: {
+        size: d.grid_size || 20, visible: d.grid_visible !== false,
+        args: { color: d.grid_color || '#e0e0e0', thickness: d.grid_thickness || 1 },
+      },
       mousewheel: { enabled: true, modifiers: ['ctrl', 'meta'], minScale: 0.1, maxScale: 5 },
       panning: { enabled: true },
     });
@@ -180,7 +185,27 @@ const SeqEditor: React.FC = () => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+      if (e.ctrlKey && e.key === 'c') {
+        if (store.selectedLifelineId) {
+          const ll = (store.diagram.lifelines || []).find((l) => l.id === store.selectedLifelineId);
+          if (ll) clipboard.current = JSON.parse(JSON.stringify(ll));
+        }
+      } else if (e.ctrlKey && e.key === 'v') {
+        if (clipboard.current) {
+          const c = clipboard.current;
+          store.addLifeline(c.x + 30);
+          // Apply copied name
+          const store2 = useDiagramStore.getState();
+          const lls = store2.diagram.lifelines || [];
+          const pasted = lls[lls.length - 1];
+          if (pasted) {
+            store2.updateLifeline(pasted.id, {
+              name: c.name, class_ref: c.class_ref,
+              activations: [...(c.activations || [])],
+            });
+          }
+        }
+      } else if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
         e.preventDefault(); store.undo();
       } else if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault(); store.redo();
@@ -371,6 +396,22 @@ const SeqEditor: React.FC = () => {
       isInternalUpdate.current = false;
     }
   }, [diagram, selectedLifelineId]);
+
+  // ── Sync grid settings ─────────────────────────────
+  useEffect(() => {
+    const graph = graphRef.current as any;
+    if (!graph) return;
+    try {
+      if (diagram.grid_visible !== false) {
+        graph.showGrid();
+        graph.setGridSize(diagram.grid_size || 20);
+        graph.drawGrid({ size: diagram.grid_size || 20,
+          args: { color: diagram.grid_color || '#e0e0e0', thickness: diagram.grid_thickness || 1 } });
+      } else {
+        graph.hideGrid();
+      }
+    } catch (e) { /* ignore */ }
+  }, [diagram.grid_visible, diagram.grid_size, diagram.grid_color, diagram.grid_thickness]);
 
   // ── Double-click: add lifeline ─────────────────────
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {

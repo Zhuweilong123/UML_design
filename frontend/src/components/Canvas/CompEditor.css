@@ -1,0 +1,46 @@
+.comp-canvas-container {
+  width: 100%; height: 100%; overflow: hidden; background: #fafafa;
+}
+
+.comp-node {
+  padding: 8px 10px; height: 100%; box-sizing: border-box;
+}
+
+.comp-node.child {
+  background: #fff;
+  border: 1px dashed #d48806;
+  border-radius: 4px;
+}
+.comp-node.child .comp-name {
+  font-size: 11px; color: #555;
+}
+.comp-node.child .comp-iface {
+  font-size: 9px;
+}
+
+.comp-node .comp-stereotype {
+  font-size: 10px; color: #d48806; text-align: center; margin-bottom: 2px;
+}
+
+.comp-node .comp-name {
+  font-weight: 600; font-size: 13px; text-align: center; color: #333;
+  padding: 4px 0; border-bottom: 1px solid #f0d080; margin-bottom: 6px;
+}
+
+.comp-node .comp-ifaces {
+  font-size: 10px; margin-top: 4px;
+}
+
+.comp-node .comp-iface {
+  padding: 1px 4px; margin: 2px 0;
+}
+.comp-node .comp-iface.provided { color: #389e0d; }
+.comp-node .comp-iface.required { color: #cf1322; }
+
+.comp-node.selected {
+  box-shadow: inset 0 0 0 2px #d48806;
+}
+
+.x6-node .x6-port-body circle { opacity: 0; }
+.x6-node:hover .x6-port-body circle { opacity: 1; transition: opacity 0.15s; }
+.x6-node { border: none !important; }

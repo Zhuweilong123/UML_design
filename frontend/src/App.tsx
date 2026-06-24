@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import UMLEditor from './components/Canvas/UMLEditor';
 import SeqEditor from './components/Canvas/SeqEditor';
+import CompEditor from './components/Canvas/CompEditor';
 import Toolbar from './components/Toolbar/Toolbar';
 import PropertyPanel from './components/PropertyPanel/PropertyPanel';
 import CodeViewer from './components/CodeViewer/CodeViewer';
@@ -107,6 +108,8 @@ const App: React.FC = () => {
             <TestCaseViewer embedded />
           ) : diagramType === 'sequence' ? (
             <SeqEditor key={`seq_${activeIdx}`} />
+          ) : diagramType === 'component' ? (
+            <CompEditor key={`comp_${activeIdx}`} />
           ) : (
             <UMLEditor key={`uml_${activeIdx}`} />
           )}
@@ -115,7 +118,9 @@ const App: React.FC = () => {
             {showTestCaseInCanvas ? (
               <span>双击单元格编辑用例 | 支持增删查改 | 全量/增量生成测试代码</span>
             ) : diagramType === 'sequence' ? (
-              <span>双击画布添加生命线 | 点击生命线A→再点生命线B创建消息 | 点击消息编辑类型 | Ctrl+滚轮缩放</span>
+              <span>双击画布添加生命线 | 点击生命线A→再点生命线B创建消息 | Ctrl+滚轮缩放</span>
+            ) : diagramType === 'component' ? (
+              <span>双击画布添加组件 | 拖拽端口创建依赖 | Ctrl+滚轮缩放 | 空格平移</span>
             ) : (
               <span>双击画布添加类 | 拖拽端口创建连接 | Ctrl+滚轮缩放 | 空格平移</span>
             )}
@@ -151,6 +156,23 @@ const App: React.FC = () => {
               />
             </div>
           </div>
+        )}
+
+        {/* Floating button to re-open panel when hidden */}
+        {!rightPanelVisible && (
+          <Tooltip title="显示右侧面板">
+            <Button
+              type="primary"
+              shape="circle"
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={toggleRightPanel}
+              style={{
+                position: 'absolute', right: 8, top: 50,
+                zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              }}
+            />
+          </Tooltip>
         )}
       </Layout>
     </Layout>

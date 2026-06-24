@@ -111,6 +111,30 @@ class SeqMessage(BaseModel):
     note: str = ""         # functional comment
 
 
+# ---------- Component Diagram models ----------
+
+
+class CompNode(BaseModel):
+    model_config = {"extra": "ignore"}
+    id: str
+    name: str = "Component"
+    x: float = 100
+    y: float = 100
+    width: float = 200
+    height: float = 160
+    parent_id: str = ""  # empty = top-level; populated = child of that component
+    provided_interfaces: list[str] = Field(default_factory=list)
+    required_interfaces: list[str] = Field(default_factory=list)
+
+
+class CompRelation(BaseModel):
+    model_config = {"extra": "ignore"}
+    id: str
+    source: str  # CompNode.id
+    target: str  # CompNode.id
+    type: str = "dependency"  # "dependency" | "delegation"
+
+
 # ---------- UML Diagram (file format) ----------
 
 class UmlDiagram(BaseModel):
@@ -124,6 +148,9 @@ class UmlDiagram(BaseModel):
     # --- Sequence diagram fields ---
     lifelines: list[SeqLifeline] = Field(default_factory=list)
     messages: list[SeqMessage] = Field(default_factory=list)
+    # --- Component diagram fields ---
+    components: list[CompNode] = Field(default_factory=list)
+    comp_relations: list[CompRelation] = Field(default_factory=list)
     # --- Shared view state ---
     grid_visible: bool = True
     grid_size: int = 20

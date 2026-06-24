@@ -248,10 +248,12 @@
       ],
       "lifelines": [],
       "messages": [],
+      "components": [],
+      "comp_relations": [],
       "grid_visible": true,
       "grid_size": 20,
-      "grid_color": "#e0e0e0",
-      "grid_thickness": 1,
+      "grid_color": "#44931a",
+      "grid_thickness": 2,
       "snap_to_grid": true,
       "zoom": 1.0,
       "pan_x": 0.0,
@@ -266,14 +268,14 @@
       "lifelines": [
         {
           "id": "life_1782307951406_o0vl10",
-          "name": "Participant",
+          "name": "OtaTask",
           "class_ref": "",
           "x": 315.0,
           "activations": []
         },
         {
           "id": "life_1782307952870_4r4djd",
-          "name": "Participant",
+          "name": "CrowTask",
           "class_ref": "",
           "x": 712.0,
           "activations": []
@@ -284,7 +286,7 @@
           "id": "msg_1782307961277_avx816",
           "from_lifeline": "life_1782307951406_o0vl10",
           "to_lifeline": "life_1782307952870_4r4djd",
-          "label": "message()",
+          "label": "OtaTask",
           "type": "sync",
           "order": 1,
           "y": 190.0,
@@ -305,7 +307,7 @@
           "from_lifeline": "life_1782307952870_4r4djd",
           "to_lifeline": "life_1782307951406_o0vl10",
           "label": "message()",
-          "type": "sync",
+          "type": "return",
           "order": 3,
           "y": 330.0,
           "note": ""
@@ -321,15 +323,127 @@
           "note": ""
         }
       ],
+      "components": [],
+      "comp_relations": [],
       "grid_visible": true,
       "grid_size": 20,
       "grid_color": "#e0e0e0",
-      "grid_thickness": 1,
+      "grid_thickness": 2,
+      "snap_to_grid": true,
+      "zoom": 1.0,
+      "pan_x": 0.0,
+      "pan_y": 0.0
+    },
+    {
+      "version": "1.0",
+      "name": "component_3",
+      "diagram_type": "component",
+      "classes": [],
+      "relations": [],
+      "lifelines": [],
+      "messages": [],
+      "components": [
+        {
+          "id": "comp_1782310443190_8zi0vi",
+          "name": "Cloud",
+          "x": -520.0,
+          "y": -40.0,
+          "width": 200.0,
+          "height": 160.0,
+          "parent_id": "",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "comp_1782310447549_0ghrlg",
+          "name": "Tbox",
+          "x": -260.0,
+          "y": -40.0,
+          "width": 200.0,
+          "height": 160.0,
+          "parent_id": "",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "comp_1782310550618_21wu5r",
+          "name": "MDC",
+          "x": 40.0,
+          "y": -100.0,
+          "width": 380.0,
+          "height": 280.0,
+          "parent_id": "",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "comp_1782311188421_a4soad",
+          "name": "SubComponent",
+          "x": 80.0,
+          "y": -20.0,
+          "width": 140.0,
+          "height": 60.0,
+          "parent_id": "comp_1782310550618_21wu5r",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "comp_1782311287664_4wqlv1",
+          "name": "SubComponent",
+          "x": 80.0,
+          "y": 60.0,
+          "width": 140.0,
+          "height": 60.0,
+          "parent_id": "comp_1782310550618_21wu5r",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "comp_1782311866449_yw9m14",
+          "name": "SubComponent",
+          "x": 240.0,
+          "y": -20.0,
+          "width": 140.0,
+          "height": 60.0,
+          "parent_id": "comp_1782310550618_21wu5r",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "comp_1782311872153_4bhcol",
+          "name": "SubComponent",
+          "x": 240.0,
+          "y": 60.0,
+          "width": 140.0,
+          "height": 60.0,
+          "parent_id": "comp_1782310550618_21wu5r",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        }
+      ],
+      "comp_relations": [
+        {
+          "id": "crel_1782310545071_jliggm",
+          "source": "comp_1782310443190_8zi0vi",
+          "target": "comp_1782310447549_0ghrlg",
+          "type": "dependency"
+        },
+        {
+          "id": "crel_1782310570519_5t0fj6",
+          "source": "comp_1782310447549_0ghrlg",
+          "target": "comp_1782310550618_21wu5r",
+          "type": "dependency"
+        }
+      ],
+      "grid_visible": true,
+      "grid_size": 20,
+      "grid_color": "#276b7c",
+      "grid_thickness": 2,
       "snap_to_grid": true,
       "zoom": 1.0,
       "pan_x": 0.0,
       "pan_y": 0.0
     }
   ],
-  "active_diagram_index": 1
+  "active_diagram_index": 2
 }

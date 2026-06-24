@@ -72,6 +72,7 @@ export interface UmlRelation {
 }
 
 import type { SeqLifeline, SeqMessage } from './sequence';
+import type { CompNode, CompRelation } from './component';
 
 export interface UmlDiagram {
   version: string;
@@ -83,6 +84,9 @@ export interface UmlDiagram {
   // Sequence diagram
   lifelines?: SeqLifeline[];
   messages?: SeqMessage[];
+  // Component diagram
+  components?: CompNode[];
+  comp_relations?: CompRelation[];
   // View
   grid_visible: boolean;
   grid_size: number;
@@ -103,6 +107,8 @@ export function createDefaultDiagram(name = 'Untitled'): UmlDiagram {
     relations: [],
     lifelines: [],
     messages: [],
+    components: [],
+    comp_relations: [],
     grid_visible: true,
     grid_size: 20,
     grid_color: '#e0e0e0',

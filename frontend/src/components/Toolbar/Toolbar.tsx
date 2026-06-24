@@ -15,6 +15,7 @@ import {
   AppstoreOutlined, EyeInvisibleOutlined,
   PlusSquareOutlined, DownOutlined, TableOutlined,
   ProjectOutlined, ApartmentOutlined, ClockCircleOutlined,
+  BlockOutlined,
 } from '@ant-design/icons';
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
@@ -319,10 +320,16 @@ const Toolbar: React.FC = () => {
           const type = d.diagram_type || 'class';
           const icon = type === 'sequence'
             ? <ClockCircleOutlined />
+            : type === 'component'
+            ? <BlockOutlined />
             : <ApartmentOutlined />;
-          const label = type === 'sequence' ? '时序图' : (d.name || '类图');
+          const typeLabel = type === 'sequence' ? '时序图' : type === 'component' ? '组件图' : '类图';
+          // Only show custom name if user explicitly renamed it (not auto-generated pattern)
+          const isAutoName = !d.name || d.name === 'Untitled' || /^(class|sequence|component)_\d+$/.test(d.name);
+          const label = isAutoName ? typeLabel : d.name;
+          const tip = isAutoName ? `${typeLabel}（${d.name}）` : `${d.name}（${typeLabel}）`;
           return (
-            <Tooltip key={i} title={type === 'sequence' ? '时序图' : '类图（双击画布添加类）'}>
+            <Tooltip key={i} title={tip}>
               <Button
                 type={isActive ? 'primary' : 'default'}
                 icon={icon}
@@ -342,6 +349,8 @@ const Toolbar: React.FC = () => {
                 onClick: () => addDiagram('class') },
               { key: 'sequence', label: '添加时序图', icon: <ClockCircleOutlined />,
                 onClick: () => addDiagram('sequence') },
+              { key: 'component', label: '添加组件图', icon: <BlockOutlined />,
+                onClick: () => addDiagram('component') },
             ],
           }} trigger={['click']}>
             <Button icon={<PlusSquareOutlined />} />
