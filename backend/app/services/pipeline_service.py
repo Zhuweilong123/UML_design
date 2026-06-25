@@ -14,6 +14,7 @@ from app.services.llm_service import chat
 from app.services.code_generator import (
     generate_code, generate_tests, optimize_uml,
     adapt_code_to_uml, update_tests_incremental,
+    generate_integrated_code,
 )
 from app.core.config import get_settings
 from app.core.security import safe_path, resolve_path
@@ -344,12 +345,16 @@ async def resume_with_instructions(
     language: str = "python",
     source_dir: str = "",
     test_dir: str = "",
+    sequence_diagram: dict | None = None,
+    component_diagram: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Resume pipeline from Stage 1 with optimization instructions."""
     async for event in run_pipeline(
         pipeline_id, diagram, language,
         auto_confirm=False, instructions=instructions,
         source_dir=source_dir, test_dir=test_dir,
+        sequence_diagram=sequence_diagram,
+        component_diagram=component_diagram,
     ):
         yield event
 
@@ -421,6 +426,8 @@ async def run_pipeline(
     instructions: str = "",
     source_dir: str = "",
     test_dir: str = "",
+    sequence_diagram: dict | None = None,
+    component_diagram: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Run the 7-stage pipeline, yielding progress updates."""
     pipeline = _pipelines.get(pipeline_id)
@@ -497,10 +504,17 @@ async def run_pipeline(
                 return
 
     if not current_code:
-        # No existing code → generate from UML (original behavior)
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+        # No existing code → generate from UML (with sequence diagram if available)
+        use_integrated = sequence_diagram and sequence_diagram.get("lifelines")
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING,
+                                   "综合生成（类图+时序图）" if use_integrated else "生成代码...")
         try:
-            current_code = await generate_code(optimized_diagram, language)
+            if use_integrated:
+                current_code = await generate_integrated_code(
+                    optimized_diagram.model_dump(), sequence_diagram, language)
+            else:
+                current_code = await generate_code(optimized_diagram, language)
+                pipeline.stages[2].result["prompt_type"] = "generate_code (class only)"
             if not current_code:
                 logger.error("[Pipeline Stage 3] generate_code returned empty — LLM JSON parse likely failed")
                 yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
@@ -1367,6 +1381,8 @@ async def resume_pipeline(
     skip_code_gen: bool = False,
     source_dir: str = "",
     test_dir: str = "",
+    sequence_diagram: dict | None = None,
+    component_diagram: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Resume pipeline from the dev_confirm stage or after case review."""
     pipeline = _pipelines.get(pipeline_id)
@@ -1413,9 +1429,15 @@ async def resume_pipeline(
                 existing_code = None
 
         if not current_code:
-            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+            use_integrated = sequence_diagram and sequence_diagram.get("lifelines")
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING,
+                                       "综合生成（类图+时序图）" if use_integrated else "生成代码...")
             try:
-                current_code = await generate_code(optimized_diagram, language)
+                if use_integrated:
+                    current_code, _prompt = await generate_integrated_code(
+                        optimized_diagram.model_dump(), sequence_diagram, language, component_diagram)
+                else:
+                    current_code = await generate_code(optimized_diagram, language)
             except Exception as e:
                 yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
                 return

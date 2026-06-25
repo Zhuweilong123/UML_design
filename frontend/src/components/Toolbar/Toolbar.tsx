@@ -274,8 +274,10 @@ const Toolbar: React.FC = () => {
   };
 
   const handleStartPipeline = async () => {
-    if (!diagram.classes.length) {
-      message.warning('请先添加类到图表中');
+    const projectDiagrams = useDiagramStore.getState().project.diagrams;
+    const classDiagram = projectDiagrams.find(d => (d.diagram_type || 'class') === 'class');
+    if (!classDiagram || !classDiagram.classes.length) {
+      message.warning('请先在类图中添加至少一个类');
       return;
     }
     try {

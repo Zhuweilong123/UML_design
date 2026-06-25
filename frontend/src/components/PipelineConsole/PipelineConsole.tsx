@@ -135,8 +135,11 @@ const PipelineConsole: React.FC = () => {
 
   // Start pipeline
   const handleStart = useCallback(async () => {
-    if (!diagram.classes.length) {
-      message.warning('请先添加类到图表中');
+    // Check if any class diagram in the project has content
+    const projectDiagrams = useDiagramStore.getState().project.diagrams;
+    const classDiagram = projectDiagrams.find(d => (d.diagram_type || 'class') === 'class');
+    if (!classDiagram || !classDiagram.classes.length) {
+      message.warning('请先在类图中添加至少一个类');
       return;
     }
 
@@ -155,7 +158,8 @@ const PipelineConsole: React.FC = () => {
       // 2. Then open WebSocket for real-time updates
       const srcDir = useUiStore.getState().pipelineSourceDir;
       const tstDir = useUiStore.getState().pipelineTestDir;
-      const ws = createPipelineWs(pipeId, diagram, selectedLanguage, false, srcDir, tstDir);
+      const ws = createPipelineWs(pipeId, diagram, selectedLanguage, false, srcDir, tstDir,
+        useDiagramStore.getState().project);
       wsRef.current = ws;
 
       ws.onmessage = (event) => {

@@ -130,6 +130,7 @@ export function createPipelineWs(
   autoConfirm = false,
   sourceDir = '',
   testDir = '',
+  project?: Project,
 ): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const tokenParam = API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : '';
@@ -140,6 +141,7 @@ export function createPipelineWs(
       diagram, language, auto_confirm: autoConfirm,
       source_dir: sourceDir,
       test_dir: testDir,
+      project: project || {},
     }));
   };
   return ws;

@@ -212,6 +212,54 @@
             "height": 150.0
           },
           "note": ""
+        },
+        {
+          "id": "class_baseTask_001",
+          "name": "BaseTask",
+          "stereotype": "abstract",
+          "attributes": [
+            {
+              "name": "taskId",
+              "type": "association",
+              "visibility": "#",
+              "default_value": null,
+              "is_static": false
+            },
+            {
+              "name": "status",
+              "type": "association",
+              "visibility": "#",
+              "default_value": null,
+              "is_static": false
+            }
+          ],
+          "methods": [
+            {
+              "name": "execute",
+              "return_type": "void",
+              "params": "",
+              "visibility": "+",
+              "is_static": false,
+              "is_abstract": true
+            },
+            {
+              "name": "cancel",
+              "return_type": "void",
+              "params": "",
+              "visibility": "+",
+              "is_static": false,
+              "is_abstract": false
+            }
+          ],
+          "position": {
+            "x": 360.0,
+            "y": -120.0
+          },
+          "size": {
+            "width": 200.0,
+            "height": 150.0
+          },
+          "note": "基类任务，定义通用任务接口和属性"
         }
       ],
       "relations": [
@@ -240,6 +288,26 @@
           "source": "class_1780061071670_hbisqo",
           "target": "class_1780061210919_ig6huh",
           "type": "aggregation",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": ""
+        },
+        {
+          "id": "rel_inherit_ota_001",
+          "source": "class_1780061050311_lb7790",
+          "target": "class_baseTask_001",
+          "type": "inheritance",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": ""
+        },
+        {
+          "id": "rel_inherit_crow_001",
+          "source": "class_1780061055677_g3krq5",
+          "target": "class_baseTask_001",
+          "type": "inheritance",
           "multiplicity_source": "",
           "multiplicity_target": "",
           "role_name": "",
@@ -290,7 +358,7 @@
           "type": "sync",
           "order": 1,
           "y": 190.0,
-          "note": ""
+          "note": "通知鸡叫进程ota的请求和预计ota时间\n"
         },
         {
           "id": "msg_1782307969791_k9dc5l",
@@ -300,7 +368,7 @@
           "type": "sync",
           "order": 2,
           "y": 250.0,
-          "note": ""
+          "note": "处理ota场景：1、如果鸡叫时间可能在ota升级期间，取消鸡叫任务，防止鸡叫打断ota升级；2、如果鸡叫在ota之后，取消鸡叫任务，因为ota结束之后会自动重启系统。"
         },
         {
           "id": "msg_1782307975259_z96443",
@@ -310,7 +378,7 @@
           "type": "return",
           "order": 3,
           "y": 330.0,
-          "note": ""
+          "note": "将鸡叫进程对ota的处理返回给ota进程"
         },
         {
           "id": "msg_1782307980289_8r7qw1",
@@ -320,7 +388,7 @@
           "type": "sync",
           "order": 4,
           "y": 410.0,
-          "note": ""
+          "note": "如果鸡叫不会打断OTA，则继续执行任务，直到完成"
         }
       ],
       "components": [],
@@ -351,7 +419,9 @@
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
-          "provided_interfaces": [],
+          "provided_interfaces": [
+            "CloudSendOtaRequestToTbox()"
+          ],
           "required_interfaces": []
         },
         {
@@ -362,59 +432,68 @@
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
-          "provided_interfaces": [],
-          "required_interfaces": []
+          "provided_interfaces": [
+            "RecieveOtaRequestFromCloud()",
+            "TboxSendOtaReqToMDC()"
+          ],
+          "required_interfaces": [
+            "CloudSendOtaRequestToTbox()"
+          ]
         },
         {
           "id": "comp_1782310550618_21wu5r",
           "name": "MDC",
-          "x": 40.0,
+          "x": 20.0,
           "y": -100.0,
-          "width": 380.0,
+          "width": 500.0,
           "height": 280.0,
           "parent_id": "",
-          "provided_interfaces": [],
-          "required_interfaces": []
+          "provided_interfaces": [
+            "RecieveOtaRequestFromTbox()"
+          ],
+          "required_interfaces": [
+            "TboxSendOtaRequestToTbox()"
+          ]
         },
         {
-          "id": "comp_1782311188421_a4soad",
-          "name": "SubComponent",
-          "x": 80.0,
-          "y": -20.0,
-          "width": 140.0,
+          "id": "comp_1782392056725_xkzmdh",
+          "name": "OtaTask",
+          "x": 380.0,
+          "y": 80.0,
+          "width": 120.0,
           "height": 60.0,
           "parent_id": "comp_1782310550618_21wu5r",
           "provided_interfaces": [],
           "required_interfaces": []
         },
         {
-          "id": "comp_1782311287664_4wqlv1",
-          "name": "SubComponent",
-          "x": 80.0,
-          "y": 60.0,
-          "width": 140.0,
+          "id": "comp_1782392077925_n13ugb",
+          "name": "MM_APP",
+          "x": 60.0,
+          "y": 20.0,
+          "width": 120.0,
           "height": 60.0,
           "parent_id": "comp_1782310550618_21wu5r",
           "provided_interfaces": [],
           "required_interfaces": []
         },
         {
-          "id": "comp_1782311866449_yw9m14",
-          "name": "SubComponent",
-          "x": 240.0,
-          "y": -20.0,
-          "width": 140.0,
+          "id": "comp_1782392086591_7mjtfs",
+          "name": "CrowTask",
+          "x": 380.0,
+          "y": -40.0,
+          "width": 120.0,
           "height": 60.0,
           "parent_id": "comp_1782310550618_21wu5r",
           "provided_interfaces": [],
           "required_interfaces": []
         },
         {
-          "id": "comp_1782311872153_4bhcol",
-          "name": "SubComponent",
-          "x": 240.0,
-          "y": 60.0,
-          "width": 140.0,
+          "id": "comp_1782392094655_g0i7ac",
+          "name": "TaskScheduler",
+          "x": 220.0,
+          "y": 20.0,
+          "width": 120.0,
           "height": 60.0,
           "parent_id": "comp_1782310550618_21wu5r",
           "provided_interfaces": [],
@@ -429,7 +508,25 @@
           "type": "dependency"
         },
         {
-          "id": "crel_1782310570519_5t0fj6",
+          "id": "crel_1782392264846_15hmvg",
+          "source": "comp_1782392094655_g0i7ac",
+          "target": "comp_1782392086591_7mjtfs",
+          "type": "dependency"
+        },
+        {
+          "id": "crel_1782392267644_fsrdsp",
+          "source": "comp_1782392094655_g0i7ac",
+          "target": "comp_1782392056725_xkzmdh",
+          "type": "dependency"
+        },
+        {
+          "id": "crel_1782392270744_e0ihve",
+          "source": "comp_1782392077925_n13ugb",
+          "target": "comp_1782392094655_g0i7ac",
+          "type": "dependency"
+        },
+        {
+          "id": "crel_1782392410820_euki44",
           "source": "comp_1782310447549_0ghrlg",
           "target": "comp_1782310550618_21wu5r",
           "type": "dependency"
@@ -445,5 +542,5 @@
       "pan_y": 0.0
     }
   ],
-  "active_diagram_index": 2
+  "active_diagram_index": 1
 }

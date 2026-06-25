@@ -229,6 +229,125 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
         return {}
 
 
+async def generate_integrated_code(
+    class_diagram: dict | None,
+    sequence_diagram: dict | None,
+    language: str,
+    component_diagram: dict | None = None,
+) -> tuple[dict, str]:
+    """Generate code combining class diagram (structure) + sequence diagram (behavior)
+    + component diagram (module architecture).
+
+    Returns (files_dict, prompt_text).
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    if not class_diagram:
+        return {}, ""
+
+    has_seq = sequence_diagram and sequence_diagram.get("lifelines")
+    has_comp = component_diagram and component_diagram.get("components")
+
+    if not has_seq and not has_comp:
+        from app.models.uml import UmlDiagram
+        diagram = UmlDiagram(**class_diagram)
+        _logger.info("[Integrated] No sequence/component diagrams — standard generation")
+        return await generate_code(diagram, language), ""
+
+    _logger.info(f"[Integrated] Generating: class{'+seq' if has_seq else ''}{'+comp' if has_comp else ''}")
+
+    classes_text = json.dumps(class_diagram.get("classes", []), indent=2, ensure_ascii=False)
+
+    # Sequence diagram → interaction summary
+    msg_block = ""
+    if has_seq:
+        lifelines = sequence_diagram.get("lifelines", [])
+        messages = sequence_diagram.get("messages", [])
+        msg_lines = []
+        for m in sorted(messages, key=lambda x: x.get("order", 0)):
+            from_name = next((l["name"] for l in lifelines if l["id"] == m.get("from_lifeline")), "?")
+            to_name = next((l["name"] for l in lifelines if l["id"] == m.get("to_lifeline")), "?")
+            note = m.get("note", "")
+            msg_lines.append(f"  {from_name} → {to_name}: {m.get('label', '')} [{m.get('type', 'sync')}]"
+                             + (f"  ── {note}" if note else ""))
+        msg_block = f"""## Sequence Diagram (method call chains — fill method bodies):
+```
+{chr(10).join(msg_lines)}
+```
+"""
+
+    # Component diagram → module structure
+    comp_block = ""
+    if has_comp:
+        comps = component_diagram.get("components", [])
+        comp_lines = []
+        for c in comps:
+            ifaces = c.get("provided_interfaces", [])
+            reqs = c.get("required_interfaces", [])
+            detail = ""
+            if ifaces: detail += f" provides: [{', '.join(ifaces)}]"
+            if reqs: detail += f" requires: [{', '.join(reqs)}]"
+            comp_lines.append(f"  {c.get('name', '?')}{' (sub-component)' if c.get('parent_id') else ''}{detail}")
+        comp_block = f"""## Component Diagram (module architecture — imports and dependencies):
+```
+{chr(10).join(comp_lines) if comp_lines else '(none)'}
+```
+"""
+
+    prompt = f"""Generate complete, compilable {language} code from the following multi-view design.
+
+## Class Diagram (structure):
+```json
+{classes_text}
+```
+{msg_block}{comp_block}
+## Requirements:
+- Generate a separate file for EACH class listed above — do NOT merge classes.
+- CRITICAL: If sequence diagram is provided, use it to FILL method bodies with call logic.
+- If component diagram is provided, use it to organize imports and module structure.
+- Follow {language} best practices. Add proper imports. Keep the public API.
+- Return the result as a JSON object mapping filenames to file content:
+```json
+{{"file1.py": "content...", "file2.py": "content..."}}
+```
+Only output the JSON object, no other text.
+"""
+    _logger.info(f"[Integrated] Prompt ({len(prompt)} chars):\n{prompt[:2000]}")
+
+    _logger.info(f"[Integrated] Prompt ({len(prompt)} chars)")
+
+    # Save prompt to pipeline_log for diagnostics
+    try:
+        from pathlib import Path as _Path
+        _log_dir = _Path(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_dir.mkdir(exist_ok=True)
+        _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
+        _prompt_file = _log_dir / f"llm_prompt_{_ts}.md"
+        _prompt_file.write_text(prompt, encoding="utf-8")
+        _logger.info(f"[Integrated] Prompt saved to: {_prompt_file}")
+    except Exception:
+        pass
+
+    response = await chat(
+        prompt=prompt,
+        system_prompt=f"You are an expert {language} developer. Generate code from UML+sequence designs. Output only valid JSON.",
+        temperature=0.3,
+        max_tokens=8192,
+        json_mode=True,
+    )
+    try:
+        cleaned = clean_llm_json_response(response)
+        result = json.loads(cleaned)
+        if isinstance(result, dict) and result:
+            _logger.info(f"[Integrated] Generated {len(result)} files from class+sequence diagrams")
+            return result, prompt
+        return {}, prompt
+    except json.JSONDecodeError:
+        _logger.warning(f"[Integrated] JSON parse failed, raw: {response[:200]}")
+        return {}, prompt
+
+
 async def generate_tests(
     code_files: dict[str, str], language: str, test_cases: str = ""
 ) -> dict[str, str]:
