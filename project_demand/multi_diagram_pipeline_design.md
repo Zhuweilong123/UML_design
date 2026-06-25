@@ -1,147 +1,118 @@
 # 多图综合 Pipeline 设计方案
 
-> 讨论时间: 2026-06-23
-> 状态: 设计阶段（未实现）
+> 设计时间: 2026-06-23
+> 实施完成: 2026-06-25
+> 状态: ✅ 已实现
 
 ## 背景
 
-当前 UML Designer 仅支持类图（Class Diagram）的设计与代码生成。实际开发中还有时序图（Sequence Diagram）、组件图（Component Diagram）等需求。本文档讨论将 Pipeline 从单图驱动升级为多图综合驱动的设计方案。
+将 UML Designer 从单图（类图）驱动升级为多图（类图 + 时序图 + 组件图）综合驱动。多张图代表系统的不同视角，Pipeline 打通它们，生成更完整的代码和测试。
 
 ## 核心思路
 
-多张图不是"各跑各的"，而是**不同视角描述同一个系统**。类图给结构骨架、时序图给行为逻辑、组件图给模块架构。Pipeline 需要打通这些图，综合生成更完整的代码和测试。
+多张图不是"各跑各的"，而是**不同视角描述同一个系统**。类图给结构骨架、时序图给行为逻辑、组件图给模块架构。
 
-## 数据模型
+## 数据模型 — 已实现
 
-### Project 容器（替代单 Diagram）
+### Project 容器
 
 ```json
 {
   "name": "MyProject",
   "version": "1.0",
   "diagrams": [
-    { "type": "class",     "data": { "classes": [...], "relations": [...] } },
-    { "type": "sequence",  "data": { "lifelines": [...], "messages": [...] } },
-    { "type": "component", "data": { "components": [...], "interfaces": [...], "links": [...] } }
-  ]
-}
-```
-
-### 图之间的引用
-
-时序图的生命线通过 ID 引用类图中的类：
-
-```json
-{
-  "lifelines": [
-    { "id": "L1", "class_ref": "class_ota_id" },
-    { "id": "L2", "class_ref": "class_crow_id" }
+    { "diagram_type": "class",     "classes": [...], "relations": [...] },
+    { "diagram_type": "sequence",  "lifelines": [...], "messages": [...] },
+    { "diagram_type": "component", "components": [...], "comp_relations": [...] }
   ],
-  "messages": [
-    { "from": "L1", "to": "L2", "method": "clear_scheduled_crow", "order": 1 }
-  ]
+  "active_diagram_index": 0
 }
 ```
 
-组件图同理引用类图中的类来定义组件的内部结构。
+- 文件格式: `.umlproj`（向下兼容 `.uml`）
+- 标签页切换三种图类型
+- `SeqLifeline.class_ref` 可引用类图中的类 ID
 
-## 逐阶段设计
+## 逐阶段实现
 
-### Stage 1 — UML 优化（交叉验证）
+### Stage 1 — UML 优化（单图）✅
 
-当前只优化类图。多图模式下，LLM 同时看到多张图，进行交叉一致性校验：
+当前优化针对活跃图类型，`optimize_uml` 根据 `diagram_type` 自动切换 prompt 和校验规则：
+- `class` → 类图规则（visibility/stereotype/relation type）
+- `sequence` → 时序图规则（lifeline/message/order/note）
+- `component` → 组件图规则（component/interface/dependency）
 
-- **验证示例**：类图 OtaTask 有 `execute()` 方法 → 时序图引用 `OtaTask.execute()` → 组件图中 OtaTask 在 task_module → 三者一致 ✅
-- **冲突示例**：类图 SentinelTask 无 `is_running` 属性 → 时序图 `SentinelTask.execute()` 后检查 `self.is_running` → LLM 标记矛盾，修正被错误的图
+交叉验证（多图一致性校验）——设计文档中规划，尚未实现。
 
-LLM 输出格式：
-```json
-{
-  "consistency_report": [
-    { "severity": "error", "msg": "时序图引用类图不存在的属性", "fix": "..." }
-  ],
-  "diagrams": { "class": {...}, "sequence": {...} }
-}
-```
+### Stage 3 — 代码生成（综合）✅
 
-### Stage 3 — 代码生成（综合）
+Pipeline 启动时自动从 Project 提取类图 + 时序图 + 组件图，调用 `generate_integrated_code()`：
 
-| 图类型 | 贡献 | 示例 |
+| 图类型 | 贡献 | 实现 |
 |--------|------|------|
-| 类图 | 类定义骨架（属性+方法签名） | `class OtaTask: def execute(self): pass` |
-| 时序图 | 方法体实现（调用链逻辑） | `execute()` 内部: `check_random() → clear_scheduled_crow() → perform_upgrade()` |
-| 组件图 | 模块结构（import + 包组织） | `from task_module import CrowTask, BaseTask` |
+| 类图 | 类定义骨架（属性+方法签名） | 必选，没有类图无法启动 |
+| 时序图 | 方法体实现（消息→调用链） | 可选，存在时方法体不再空 `pass` |
+| 组件图 | 模块结构（import + 依赖关系） | 可选，提供组件名和接口信息 |
 
-生成代码时，时序图的方法调用链填充方法体、组件图决定文件组织。每张图生成结构化 Summary 传给 LLM，不传完整 JSON（节省 token）：
-
+Prompt 结构：
 ```
-## 时序图摘要
-OtaTask.execute() 调用链: check_random() → clear_scheduled_crow() → perform_upgrade()
-CrowTask 被 OtaTask / SentinelTask 调用
+## Class Diagram (structure)
+{classes JSON}
 
-## 组件图摘要
-OtaTask, CrowTask, BaseTask ∈ task_module
-MM_APP → 依赖 task_module
-```
+## Sequence Diagram (method call chains)
+OtaTask → CrowTask: clear_scheduled_crow() [sync]  ── 业务备注
 
-### Stage 5 — 测试生成（分层）
-
-| 测试层 | 来源 | 内容 |
-|--------|------|------|
-| 单元测试 | 类图 | 每个类的每个方法独立测试 |
-| 集成测试 | 时序图 | 端到端流程验证（跨类调用链） |
-| 架构测试 | 组件图 | 模块依赖正确性、接口契约 |
-
-### Stage 6 — 测试执行（分层）
-
-```
-Layer 1: 单元测试  → 先跑（底层，失败率低）
-Layer 2: 集成测试  → 通过了再跑（依赖底层正确）
-Layer 3: 架构测试  → 最后跑
+## Component Diagram (module architecture)
+AuthService provides: [IAuth] requires: [ILogger]
 ```
 
-底层挂了不浪费时间跑上层，问题定位更精确。
+- Prompt 完整保存在 `pipeline_log/llm_prompt_{ts}.md`
+- 要求"每个类单独一个文件"，不合并
 
-### Stage 7 — 代码优化（回溯）
+### Stage 5 — 测试生成 ✅
 
-失败后 LLM 回溯对应图定位根因：
+当前仍为单图测试生成（类图→单元测试），时序图→集成测试 和 组件图→架构测试 待实现。
 
-- 失败：`test_ota_crow_interaction → FAIL`
-- 回溯时序图第 3 步：`OtaTask → CrowTask: clear_scheduled_crow()`
-- 回溯类图：`CrowTask` 没有 `clear_scheduled_crow()` 方法
-- → LLM 知根因在类图缺方法 → 精确修复
+### Stage 6 — 测试执行 ✅
 
-另一个路径：
-- 类图和时序图都正确 → LLM 推断可能是测试逻辑问题 → 标记用户审查
+真实 pytest 执行（`asyncio.to_thread` + `subprocess.run`），编译错误自动修复（只修 import/syntax，不改逻辑）。
+
+### Stage 7 — 代码优化 ✅
+
+- 源码级优化（只改源码不改测试）
+- 轮间记忆传递（上轮修复了什么、仍失败什么）
+- 僵化检测（同样失败 2 轮 → 提前退出提示人工审查）
+- 回溯定位（失败→对应图）——设计中，待实现
 
 ## 数据流
 
 ```
 Project
-├── class_diagram      ──→ 结构骨架 ──→ 单元测试
-├── sequence_diagram   ──→ 方法实现 ──→ 集成测试
-└── component_diagram  ──→ 模块架构 ──→ 架构测试
-        │                        │
-        └────────────────────────┴──→ LLM 交叉验证 + 综合代码生成
+├── class_diagram      ──→ 类骨架 ──→ 单元测试
+├── sequence_diagram   ──→ 方法体 ──→ 集成测试（待实现）
+└── component_diagram  ──→ 模块结构 ──→ 架构测试（待实现）
+        │                     │
+        └─────────────────────┴──→ generate_integrated_code()
 ```
 
 ## 关键设计决策
 
-| 决策 | 方案 |
+| 决策 | 状态 |
 |------|------|
-| 图之间引用 | 通过 ID 引用（timeline.class_ref → class.id） |
-| 图可缺失 | 是，只有类图时等于当前单图模式，渐进增强 |
-| Prompt 长度控制 | 每张图生成 JSON Summary 而非传全文 |
-| 文件格式 | `.uml` → `.umlproj`，向下兼容 |
-| 项目结构 | 一个 project 包含多图，而非多个独立文件 |
+| 图之间引用 | `SeqLifeline.class_ref` → `UmlClass.id` ✅ |
+| 图可缺失 | 类图必选，时序图/组件图可选渐进增强 ✅ |
+| Prompt 长度控制 | 传结构化摘要（消息列表、组件列表），非完整 JSON ✅ |
+| 文件格式 | `.umlproj` 向下兼容 `.uml` ✅ |
+| 项目结构 | Project 包含多图，标签页切换 ✅ |
+| Prompt 日志 | 完整 prompt 保存到 `pipeline_log/` ✅ |
 
 ## 演进路径
 
 ```
-test:
-Phase 1: 重构数据模型 Project + 多图容器（不影响现有功能）
-Phase 2: 增加时序图编辑器 + X6 渲染
-Phase 3: 时序图 → 代码生成（方法调用链）
-Phase 4: 增加组件图编辑器 + X6 渲染
-Phase 5: 多图综合 Pipeline（交叉验证 + 分层测试 + 综合优化）
+✅ Phase 1: 重构数据模型 Project + 多图容器
+✅ Phase 2: 增加时序图编辑器 + X6 渲染
+✅ Phase 3: 时序图 → 代码生成（方法调用链）
+✅ Phase 4: 增加组件图编辑器 + X6 渲染
+✅ Phase 5: 多图综合 Pipeline（综合代码生成 + 轮间记忆 + 僵化退出）
+📋 待实现: 交叉一致性验证 / 分层测试 / 集成测试生成 / 回溯定位
 ```
