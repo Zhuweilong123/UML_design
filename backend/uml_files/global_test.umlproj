@@ -4,137 +4,24 @@
   "diagrams": [
     {
       "version": "1.0",
-      "name": "DataPipelineClassDiagram",
+      "name": "DataCollaborationDesign",
       "diagram_type": "class",
       "classes": [
         {
-          "id": "class_raw_log",
-          "name": "RawTransactionLog",
+          "id": "class_datasendmodule",
+          "name": "DataSendModule",
           "stereotype": "class",
           "attributes": [
             {
-              "name": "rawData",
-              "type": "association",
-              "visibility": "+",
+              "name": "dataBuffer",
+              "type": "string",
+              "visibility": "-",
               "default_value": null,
               "is_static": false
             },
             {
-              "name": "timestamp",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "sourceId",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
-          "methods": [],
-          "position": {
-            "x": 50.0,
-            "y": 50.0
-          },
-          "size": {
-            "width": 220.0,
-            "height": 130.0
-          },
-          "note": "原始日志，在Send模块使用，包含未经处理的原始数据",
-          "provided_interfaces": [],
-          "required_interfaces": []
-        },
-        {
-          "id": "class_standard_log",
-          "name": "StandardTransactionLog",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "standardFields",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "normalizedTimestamp",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "sourceId",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
-          "methods": [],
-          "position": {
-            "x": 350.0,
-            "y": 50.0
-          },
-          "size": {
-            "width": 240.0,
-            "height": 130.0
-          },
-          "note": "标准化日志，Send模块产出，Process模块消费，字段已规范化",
-          "provided_interfaces": [],
-          "required_interfaces": []
-        },
-        {
-          "id": "class_aggregated_risk",
-          "name": "AggregatedRiskData",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "riskScore",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "riskTags",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "aggregatedMetrics",
-              "type": "association",
-              "visibility": "+",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
-          "methods": [],
-          "position": {
-            "x": 650.0,
-            "y": 50.0
-          },
-          "size": {
-            "width": 240.0,
-            "height": 130.0
-          },
-          "note": "带风控标签的聚合数据，Process模块产出，Save模块消费",
-          "provided_interfaces": [],
-          "required_interfaces": []
-        },
-        {
-          "id": "class_multi_source_adapter",
-          "name": "MultiSourceAdapter",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "sourceConfigs",
-              "type": "association",
+              "name": "targetEndpoint",
+              "type": "string",
               "visibility": "-",
               "default_value": null,
               "is_static": false
@@ -142,49 +29,44 @@
           ],
           "methods": [
             {
-              "name": "adaptRawData",
-              "return_type": "RawTransactionLog",
-              "params": "sourceData: object",
+              "name": "sendData",
+              "return_type": "bool",
+              "params": "data: string",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "getSourceInfo",
+              "name": "prepareData",
               "return_type": "string",
-              "params": "sourceId: string",
-              "visibility": "+",
+              "params": "rawData: string",
+              "visibility": "-",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
-            "x": 50.0,
-            "y": 250.0
+            "x": -130.0,
+            "y": 50.0
           },
           "size": {
-            "width": 220.0,
+            "width": 200.0,
             "height": 150.0
           },
-          "note": "Send域：多源适配，将不同来源数据适配为RawTransactionLog",
-          "provided_interfaces": [],
+          "note": "负责数据的发送和初步封装",
+          "provided_interfaces": [
+            "IDataSender"
+          ],
           "required_interfaces": []
         },
         {
-          "id": "class_disk_breakdown_buffer",
-          "name": "DiskBreakdownBuffer",
+          "id": "class_dataprocessmodule",
+          "name": "DataProcessModule",
           "stereotype": "class",
           "attributes": [
             {
-              "name": "bufferSize",
-              "type": "association",
-              "visibility": "-",
-              "default_value": "1000",
-              "is_static": false
-            },
-            {
-              "name": "diskPath",
-              "type": "association",
+              "name": "processingRules",
+              "type": "map<string, string>",
               "visibility": "-",
               "default_value": null,
               "is_static": false
@@ -192,345 +74,121 @@
           ],
           "methods": [
             {
-              "name": "bufferLog",
-              "return_type": "void",
-              "params": "log: RawTransactionLog",
+              "name": "processData",
+              "return_type": "string",
+              "params": "data: string",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "flushToStandard",
-              "return_type": "List<StandardTransactionLog>",
-              "params": "",
-              "visibility": "+",
-              "is_static": false,
-              "is_abstract": false
-            }
-          ],
-          "position": {
-            "x": 50.0,
-            "y": 450.0
-          },
-          "size": {
-            "width": 220.0,
-            "height": 150.0
-          },
-          "note": "Send域：断流缓冲，将RawTransactionLog缓冲并转换为StandardTransactionLog",
-          "provided_interfaces": [],
-          "required_interfaces": []
-        },
-        {
-          "id": "class_sliding_window_calculator",
-          "name": "SlidingWindowCalculator",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "windowSize",
-              "type": "association",
+              "name": "validateData",
+              "return_type": "bool",
+              "params": "data: string",
               "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "windowData",
-              "type": "association",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
-          "methods": [
-            {
-              "name": "calculateMetrics",
-              "return_type": "Map<string, double>",
-              "params": "log: StandardTransactionLog",
-              "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "getWindowStats",
-              "return_type": "Map<string, double>",
-              "params": "windowId: string",
-              "visibility": "+",
+              "name": "transformData",
+              "return_type": "string",
+              "params": "data: string",
+              "visibility": "-",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
             "x": 350.0,
-            "y": 250.0
+            "y": 50.0
           },
           "size": {
-            "width": 240.0,
+            "width": 200.0,
             "height": 150.0
           },
-          "note": "Process域：滑动窗口计算，基于StandardTransactionLog计算聚合指标",
-          "provided_interfaces": [],
-          "required_interfaces": []
+          "note": "负责数据的处理、验证和转换",
+          "provided_interfaces": [
+            "IDataProcessor"
+          ],
+          "required_interfaces": [
+            "IDataSender"
+          ]
         },
         {
-          "id": "class_risk_rule_engine",
-          "name": "RiskRuleEngine",
+          "id": "class_datasavemodule",
+          "name": "DataSaveModule",
           "stereotype": "class",
           "attributes": [
             {
-              "name": "rules",
-              "type": "association",
+              "name": "storagePath",
+              "type": "string",
               "visibility": "-",
               "default_value": null,
               "is_static": false
             },
             {
-              "name": "ruleConfig",
-              "type": "association",
+              "name": "maxRetries",
+              "type": "int",
               "visibility": "-",
-              "default_value": null,
+              "default_value": "3",
               "is_static": false
             }
           ],
           "methods": [
             {
-              "name": "evaluateRisk",
-              "return_type": "AggregatedRiskData",
-              "params": "metrics: Map<string, double>, log: StandardTransactionLog",
+              "name": "saveData",
+              "return_type": "bool",
+              "params": "data: string",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "updateRules",
+              "name": "archiveData",
               "return_type": "void",
-              "params": "newRules: List<RiskRule>",
-              "visibility": "+",
+              "params": "dataId: string",
+              "visibility": "-",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
-            "x": 350.0,
-            "y": 450.0
+            "x": 730.0,
+            "y": 50.0
           },
           "size": {
-            "width": 240.0,
+            "width": 200.0,
             "height": 150.0
           },
-          "note": "Process域：风控引擎，结合滑动窗口指标和规则生成AggregatedRiskData",
-          "provided_interfaces": [],
-          "required_interfaces": []
-        },
-        {
-          "id": "class_batch_buffer_manager",
-          "name": "BatchBufferManager",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "batchSize",
-              "type": "association",
-              "visibility": "-",
-              "default_value": "500",
-              "is_static": false
-            },
-            {
-              "name": "buffer",
-              "type": "association",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            }
+          "note": "负责数据的持久化存储和归档",
+          "provided_interfaces": [
+            "IDataSaver"
           ],
-          "methods": [
-            {
-              "name": "addToBatch",
-              "return_type": "void",
-              "params": "data: AggregatedRiskData",
-              "visibility": "+",
-              "is_static": false,
-              "is_abstract": false
-            },
-            {
-              "name": "flushBatch",
-              "return_type": "List<AggregatedRiskData>",
-              "params": "",
-              "visibility": "+",
-              "is_static": false,
-              "is_abstract": false
-            }
-          ],
-          "position": {
-            "x": 650.0,
-            "y": 250.0
-          },
-          "size": {
-            "width": 240.0,
-            "height": 150.0
-          },
-          "note": "Save域：批量缓冲管理，缓冲AggregatedRiskData后批量写入",
-          "provided_interfaces": [],
-          "required_interfaces": []
-        },
-        {
-          "id": "class_dynamic_data_router",
-          "name": "DynamicDataRouter",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "routingTable",
-              "type": "association",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "defaultRoute",
-              "type": "association",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
-          "methods": [
-            {
-              "name": "routeData",
-              "return_type": "void",
-              "params": "data: AggregatedRiskData",
-              "visibility": "+",
-              "is_static": false,
-              "is_abstract": false
-            },
-            {
-              "name": "updateRoute",
-              "return_type": "void",
-              "params": "key: string, target: string",
-              "visibility": "+",
-              "is_static": false,
-              "is_abstract": false
-            }
-          ],
-          "position": {
-            "x": 650.0,
-            "y": 450.0
-          },
-          "size": {
-            "width": 240.0,
-            "height": 150.0
-          },
-          "note": "Save域：动态路由，根据风控标签将AggregatedRiskData路由到不同存储",
-          "provided_interfaces": [],
-          "required_interfaces": []
+          "required_interfaces": [
+            "IDataProcessor"
+          ]
         }
       ],
       "relations": [
         {
-          "id": "rel_assoc_adapter_raw",
-          "source": "class_multi_source_adapter",
-          "target": "class_raw_log",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "1..*",
-          "role_name": "produces",
-          "note": "MultiSourceAdapter生成RawTransactionLog"
-        },
-        {
-          "id": "rel_assoc_buffer_raw",
-          "source": "class_disk_breakdown_buffer",
-          "target": "class_raw_log",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "0..*",
-          "role_name": "buffers",
-          "note": "DiskBreakdownBuffer消费RawTransactionLog"
-        },
-        {
-          "id": "rel_assoc_buffer_standard",
-          "source": "class_disk_breakdown_buffer",
-          "target": "class_standard_log",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "1..*",
-          "role_name": "produces",
-          "note": "DiskBreakdownBuffer输出StandardTransactionLog"
-        },
-        {
-          "id": "rel_assoc_calculator_standard",
-          "source": "class_sliding_window_calculator",
-          "target": "class_standard_log",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "0..*",
-          "role_name": "consumes",
-          "note": "SlidingWindowCalculator消费StandardTransactionLog"
-        },
-        {
-          "id": "rel_assoc_calculator_engine",
-          "source": "class_sliding_window_calculator",
-          "target": "class_risk_rule_engine",
+          "id": "rel_assoc_send_process",
+          "source": "class_datasendmodule",
+          "target": "class_dataprocessmodule",
           "type": "association",
           "multiplicity_source": "1",
           "multiplicity_target": "1",
-          "role_name": "providesMetrics",
-          "note": "SlidingWindowCalculator向RiskRuleEngine提供聚合指标"
+          "role_name": "processor",
+          "note": "DataSendModule 将数据发送给 DataProcessModule 处理"
         },
         {
-          "id": "rel_assoc_engine_aggregated",
-          "source": "class_risk_rule_engine",
-          "target": "class_aggregated_risk",
+          "id": "rel_assoc_process_save",
+          "source": "class_dataprocessmodule",
+          "target": "class_datasavemodule",
           "type": "association",
           "multiplicity_source": "1",
-          "multiplicity_target": "1..*",
-          "role_name": "produces",
-          "note": "RiskRuleEngine生成AggregatedRiskData"
-        },
-        {
-          "id": "rel_assoc_batch_aggregated",
-          "source": "class_batch_buffer_manager",
-          "target": "class_aggregated_risk",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "0..*",
-          "role_name": "buffers",
-          "note": "BatchBufferManager缓冲AggregatedRiskData"
-        },
-        {
-          "id": "rel_assoc_router_aggregated",
-          "source": "class_dynamic_data_router",
-          "target": "class_aggregated_risk",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "0..*",
-          "role_name": "routes",
-          "note": "DynamicDataRouter路由AggregatedRiskData"
-        },
-        {
-          "id": "rel_dep_adapter_buffer",
-          "source": "class_multi_source_adapter",
-          "target": "class_disk_breakdown_buffer",
-          "type": "dependency",
-          "multiplicity_source": "",
-          "multiplicity_target": "",
-          "role_name": "",
-          "note": "MultiSourceAdapter依赖DiskBreakdownBuffer进行缓冲"
-        },
-        {
-          "id": "rel_dep_calculator_engine_dep",
-          "source": "class_sliding_window_calculator",
-          "target": "class_risk_rule_engine",
-          "type": "dependency",
-          "multiplicity_source": "",
-          "multiplicity_target": "",
-          "role_name": "",
-          "note": "SlidingWindowCalculator依赖RiskRuleEngine进行风险评估"
-        },
-        {
-          "id": "rel_dep_batch_router",
-          "source": "class_batch_buffer_manager",
-          "target": "class_dynamic_data_router",
-          "type": "dependency",
-          "multiplicity_source": "",
-          "multiplicity_target": "",
-          "role_name": "",
-          "note": "BatchBufferManager依赖DynamicDataRouter进行路由"
+          "multiplicity_target": "1",
+          "role_name": "saver",
+          "note": "DataProcessModule 将处理后的数据传递给 DataSaveModule 存储"
         }
       ],
       "lifelines": [],
@@ -549,261 +207,151 @@
     },
     {
       "version": "1.0",
-      "name": "Data Lifecycle Sequence",
+      "name": "sequence_2",
       "diagram_type": "sequence",
       "classes": [],
       "relations": [],
       "lifelines": [
         {
-          "id": "life_ext_source",
-          "name": "ExternalSource",
+          "id": "life_external",
+          "name": "ExternalSystem",
           "class_ref": "",
-          "x": 80.0,
+          "x": 100.0,
           "activations": []
         },
         {
-          "id": "life_data_send",
-          "name": "DataSend",
-          "class_ref": "",
-          "x": 260.0,
+          "id": "life_send",
+          "name": "DataSendModule",
+          "class_ref": "class_datasendmodule",
+          "x": 300.0,
           "activations": []
         },
         {
-          "id": "life_queue_a",
-          "name": "QueueA",
-          "class_ref": "",
-          "x": 440.0,
+          "id": "life_process",
+          "name": "DataProcessModule",
+          "class_ref": "class_dataprocessmodule",
+          "x": 500.0,
           "activations": []
         },
         {
-          "id": "life_data_process",
-          "name": "DataProcess",
-          "class_ref": "",
-          "x": 620.0,
-          "activations": []
-        },
-        {
-          "id": "life_queue_b",
-          "name": "QueueB",
-          "class_ref": "",
-          "x": 800.0,
-          "activations": []
-        },
-        {
-          "id": "life_data_save",
-          "name": "DataSave",
-          "class_ref": "",
-          "x": 980.0,
-          "activations": []
-        },
-        {
-          "id": "life_database",
-          "name": "Database",
-          "class_ref": "",
-          "x": 1160.0,
+          "id": "life_save",
+          "name": "DataSaveModule",
+          "class_ref": "class_datasavemodule",
+          "x": 700.0,
           "activations": []
         }
       ],
       "messages": [
         {
           "id": "msg_1",
-          "from_lifeline": "life_ext_source",
-          "to_lifeline": "life_data_send",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_external",
+          "to_lifeline": "life_send",
+          "label": "submitData(rawData)",
+          "type": "sync",
           "order": 1,
           "y": 190.0,
-          "note": "外部源上报原始数据，DataSend 接收"
+          "note": "外部系统提交原始数据到 DataSendModule"
         },
         {
           "id": "msg_2",
-          "from_lifeline": "life_data_send",
-          "to_lifeline": "life_data_send",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_send",
+          "to_lifeline": "life_send",
+          "label": "prepareData(rawData)",
+          "type": "self",
           "order": 2,
           "y": 230.0,
-          "note": "DataSend 内部触发异构转换，将原始数据转为标准格式"
+          "note": "DataSendModule 内部封装和准备数据"
         },
         {
           "id": "msg_3",
-          "from_lifeline": "life_data_send",
-          "to_lifeline": "life_data_send",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_send",
+          "to_lifeline": "life_process",
+          "label": "sendData(processedData)",
+          "type": "sync",
           "order": 3,
           "y": 270.0,
-          "note": "若网络异常，触发本地磁盘缓冲流程，暂存数据"
+          "note": "将封装后的数据发送到 DataProcessModule 进行处理"
         },
         {
           "id": "msg_4",
-          "from_lifeline": "life_data_send",
-          "to_lifeline": "life_queue_a",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_process",
+          "to_lifeline": "life_process",
+          "label": "validateData(data)",
+          "type": "self",
           "order": 4,
           "y": 310.0,
-          "note": "DataSend 将标准格式数据推入 QueueA"
+          "note": "DataProcessModule 验证数据的完整性和正确性"
         },
         {
           "id": "msg_5",
-          "from_lifeline": "life_queue_a",
-          "to_lifeline": "life_data_process",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_process",
+          "to_lifeline": "life_process",
+          "label": "transformData(data)",
+          "type": "self",
           "order": 5,
           "y": 350.0,
-          "note": "DataProcess 从 QueueA 消费数据"
+          "note": "根据规则转换数据格式"
         },
         {
           "id": "msg_6",
-          "from_lifeline": "life_data_process",
-          "to_lifeline": "life_data_process",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_process",
+          "to_lifeline": "life_save",
+          "label": "saveData(transformedData)",
+          "type": "sync",
           "order": 6,
           "y": 390.0,
-          "note": "DataProcess 内部校验数据完整性和格式"
+          "note": "将处理完成的数据发送到 DataSaveModule 进行持久化存储"
         },
         {
           "id": "msg_7",
-          "from_lifeline": "life_data_process",
-          "to_lifeline": "life_data_process",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_save",
+          "to_lifeline": "life_save",
+          "label": "archiveData(dataId)",
+          "type": "self",
           "order": 7,
           "y": 430.0,
-          "note": "进入 SlidingWindowCalculator 进行滑动窗口计算"
+          "note": "DataSaveModule 内部归档存储的数据"
         },
         {
           "id": "msg_8",
-          "from_lifeline": "life_data_process",
-          "to_lifeline": "life_data_process",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_save",
+          "to_lifeline": "life_process",
+          "label": "return saveResult",
+          "type": "return",
           "order": 8,
           "y": 470.0,
-          "note": "RiskRuleEngine 根据计算结果打标签（如 high/low risk）"
+          "note": "返回存储结果（成功/失败）"
         },
         {
           "id": "msg_9",
-          "from_lifeline": "life_data_process",
-          "to_lifeline": "life_queue_b",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_process",
+          "to_lifeline": "life_send",
+          "label": "return processResult",
+          "type": "return",
           "order": 9,
           "y": 510.0,
-          "note": "DataProcess 将带标签数据推入 QueueB"
+          "note": "返回处理结果给 DataSendModule"
         },
         {
           "id": "msg_10",
-          "from_lifeline": "life_queue_b",
-          "to_lifeline": "life_data_save",
-          "label": "",
-          "type": "association",
+          "from_lifeline": "life_send",
+          "to_lifeline": "life_external",
+          "label": "return finalResult",
+          "type": "return",
           "order": 10,
           "y": 550.0,
-          "note": "DataSave 从 QueueB 消费带标签数据"
-        },
-        {
-          "id": "msg_11",
-          "from_lifeline": "life_data_save",
-          "to_lifeline": "life_data_save",
-          "label": "",
-          "type": "association",
-          "order": 11,
-          "y": 590.0,
-          "note": "DataSave 将数据放入内存 Buffer 暂存"
-        },
-        {
-          "id": "msg_12",
-          "from_lifeline": "life_data_save",
-          "to_lifeline": "life_data_save",
-          "label": "",
-          "type": "association",
-          "order": 12,
-          "y": 630.0,
-          "note": "检查是否满足触发条件（如 Buffer 大小或时间阈值）"
-        },
-        {
-          "id": "msg_13",
-          "from_lifeline": "life_data_save",
-          "to_lifeline": "life_database",
-          "label": "",
-          "type": "association",
-          "order": 13,
-          "y": 670.0,
-          "note": "探测 DB 当前负载，决定 Batch Size"
-        },
-        {
-          "id": "msg_14",
-          "from_lifeline": "life_database",
-          "to_lifeline": "life_data_save",
-          "label": "",
-          "type": "association",
-          "order": 14,
-          "y": 710.0,
-          "note": "返回 DB 负载信息，DataSave 据此调整 Batch Size"
-        },
-        {
-          "id": "msg_15",
-          "from_lifeline": "life_data_save",
-          "to_lifeline": "life_database",
-          "label": "",
-          "type": "association",
-          "order": 15,
-          "y": 750.0,
-          "note": "根据标签（cold）路由写入冷存储"
-        },
-        {
-          "id": "msg_16",
-          "from_lifeline": "life_data_save",
-          "to_lifeline": "life_database",
-          "label": "",
-          "type": "association",
-          "order": 16,
-          "y": 790.0,
-          "note": "根据标签（hot）路由写入热存储"
-        },
-        {
-          "id": "msg_1782479456637_ncjs1i",
-          "from_lifeline": "life_queue_a",
-          "to_lifeline": "life_queue_a",
-          "label": "message()",
-          "type": "sync",
-          "order": 17,
-          "y": 830.0,
-          "note": ""
-        },
-        {
-          "id": "msg_1782479457103_lciavt",
-          "from_lifeline": "life_queue_a",
-          "to_lifeline": "life_queue_a",
-          "label": "message()",
-          "type": "sync",
-          "order": 18,
-          "y": 870.0,
-          "note": ""
+          "note": "返回最终处理结果给外部系统"
         }
       ],
       "fragments": [
         {
-          "id": "frag_network_error",
-          "type": "association",
-          "label": "",
-          "x": 200.0,
-          "width": 120.0,
-          "y_start": 250.0,
-          "y_end": 290.0
-        },
-        {
-          "id": "frag_cold_hot_routing",
-          "type": "association",
-          "label": "",
-          "x": 920.0,
-          "width": 300.0,
-          "y_start": 730.0,
-          "y_end": 810.0
+          "id": "frag_opt_validation",
+          "type": "opt",
+          "label": "[validation failed]",
+          "x": 250.0,
+          "width": 550.0,
+          "y_start": 310.0,
+          "y_end": 360.0
         }
       ],
       "components": [],
@@ -819,7 +367,7 @@
     },
     {
       "version": "1.0",
-      "name": "Data Collaboration System Architecture",
+      "name": "component_3",
       "diagram_type": "component",
       "classes": [],
       "relations": [],
@@ -828,147 +376,60 @@
       "fragments": [],
       "components": [
         {
-          "id": "comp_data_source",
-          "name": "DataSources",
-          "x": -500.0,
+          "id": "comp_datasend",
+          "name": "DataSendModule",
+          "x": 50.0,
           "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "HttpApi"
+            "IDataSender"
           ],
           "required_interfaces": []
         },
         {
-          "id": "comp_send",
-          "name": "DataSendModule",
-          "x": -250.0,
-          "y": 50.0,
-          "width": 200.0,
-          "height": 160.0,
-          "parent_id": "",
-          "provided_interfaces": [
-            "Producer"
-          ],
-          "required_interfaces": [
-            "HttpApi"
-          ]
-        },
-        {
-          "id": "comp_queue_a",
-          "name": "MessageQueueA",
-          "x": 0.0,
-          "y": 50.0,
-          "width": 180.0,
-          "height": 160.0,
-          "parent_id": "",
-          "provided_interfaces": [
-            "ConsumeFromA",
-            "ProduceToA"
-          ],
-          "required_interfaces": [
-            "Producer"
-          ]
-        },
-        {
-          "id": "comp_process",
+          "id": "comp_dataprocess",
           "name": "DataProcessModule",
-          "x": 230.0,
+          "x": 320.0,
           "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "ProducerForB"
+            "IDataProcessor"
           ],
           "required_interfaces": [
-            "ConsumeFromA"
+            "IDataSender"
           ]
         },
         {
-          "id": "comp_queue_b",
-          "name": "MessageQueueB",
-          "x": 480.0,
-          "y": 50.0,
-          "width": 180.0,
-          "height": 160.0,
-          "parent_id": "",
-          "provided_interfaces": [
-            "ConsumeFromB",
-            "ProduceToB"
-          ],
-          "required_interfaces": [
-            "ProducerForB"
-          ]
-        },
-        {
-          "id": "comp_save",
+          "id": "comp_datasave",
           "name": "DataSaveModule",
-          "x": 710.0,
+          "x": 590.0,
           "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "DbInterface"
+            "IDataSaver"
           ],
           "required_interfaces": [
-            "ConsumeFromB"
-          ]
-        },
-        {
-          "id": "comp_storage",
-          "name": "StorageSystems",
-          "x": 960.0,
-          "y": 50.0,
-          "width": 200.0,
-          "height": 160.0,
-          "parent_id": "",
-          "provided_interfaces": [
-            "ClickHouse",
-            "HDFS"
-          ],
-          "required_interfaces": [
-            "DbInterface"
+            "IDataProcessor"
           ]
         }
       ],
       "comp_relations": [
         {
-          "id": "crel_source_send",
-          "source": "comp_data_source",
-          "target": "comp_send",
+          "id": "crel_send_process",
+          "source": "comp_datasend",
+          "target": "comp_dataprocess",
           "type": "dependency"
         },
         {
-          "id": "crel_send_queuea",
-          "source": "comp_send",
-          "target": "comp_queue_a",
-          "type": "dependency"
-        },
-        {
-          "id": "crel_queuea_process",
-          "source": "comp_queue_a",
-          "target": "comp_process",
-          "type": "dependency"
-        },
-        {
-          "id": "crel_process_queueb",
-          "source": "comp_process",
-          "target": "comp_queue_b",
-          "type": "dependency"
-        },
-        {
-          "id": "crel_queueb_save",
-          "source": "comp_queue_b",
-          "target": "comp_save",
-          "type": "dependency"
-        },
-        {
-          "id": "crel_save_storage",
-          "source": "comp_save",
-          "target": "comp_storage",
+          "id": "crel_process_save",
+          "source": "comp_dataprocess",
+          "target": "comp_datasave",
           "type": "dependency"
         }
       ],
