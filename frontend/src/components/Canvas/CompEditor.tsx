@@ -3,7 +3,9 @@
  * Reuses the same X6 patterns as UMLEditor.
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
+import { Button, Tooltip } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { Graph, Node, Edge } from '@antv/x6';
 import { History } from '@antv/x6-plugin-history';
 import { Transform } from '@antv/x6-plugin-transform';
@@ -78,18 +80,20 @@ function buildCompHTML(comp: CompNode, selected: boolean): string {
   const isChild = !!comp.parent_id;
   const selClass = selected ? 'selected' : '';
   const childClass = isChild ? 'child' : '';
+
+  // UML 2.5.1 lollipop (provided) and socket (required) notation
   const provided = (comp.provided_interfaces || []).map((i) =>
-    `<div class="comp-iface provided">◉ ${i}</div>`
+    `<div class="comp-iface provided"><span class="comp-lollipop">⊃</span> ${i}</div>`
   ).join('');
   const required = (comp.required_interfaces || []).map((i) =>
-    `<div class="comp-iface required">◡ ${i}</div>`
+    `<div class="comp-iface required"><span class="comp-socket">⊂</span> ${i}</div>`
   ).join('');
 
   return `<div class="comp-node ${childClass} ${selClass}">
     <div class="comp-stereotype">${isChild ? '' : '«component»'}</div>
     <div class="comp-name">${comp.name}</div>
-    ${provided ? `<div class="comp-ifaces">${provided}</div>` : ''}
-    ${required ? `<div class="comp-ifaces">${required}</div>` : ''}
+    ${provided ? `<div class="comp-block"><div class="comp-block-label">provided interfaces</div>${provided}</div>` : ''}
+    ${required ? `<div class="comp-block"><div class="comp-block-label">required interfaces</div>${required}</div>` : ''}
   </div>`;
 }
 
@@ -370,47 +374,46 @@ const CompEditor: React.FC = () => {
     } catch (e) { /* ignore */ }
   }, [diagram.grid_visible, diagram.grid_size, diagram.grid_color, diagram.grid_thickness]);
 
-  // ── Double-click: add component (top-level or child) ─
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    try {
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const graphPt = graph.clientToLocal(x, y);
+  const [showToolbar, setShowToolbar] = useState(true);
 
-      // Check if click is inside an existing component → create child
-      const store = useDiagramStore.getState();
-      const comps = store.diagram.components || [];
-      const hitComp = comps.find((c) => {
-        const w = c.parent_id ? CHILD_WIDTH : COMP_WIDTH;
-        const h = c.parent_id ? CHILD_HEIGHT : COMP_HEIGHT;
-        return graphPt.x >= c.x && graphPt.x <= c.x + w
-            && graphPt.y >= c.y && graphPt.y <= c.y + h;
-      });
-
-      if (hitComp) {
-        // Create child inside parent
-        const childX = graphPt.x - hitComp.x - CHILD_WIDTH / 2;
-        const childY = graphPt.y - hitComp.y - CHILD_HEIGHT / 2;
-        store.addComponent({
-          x: Math.max(10, childX),
-          y: Math.max(30, childY),
-        }, hitComp.id);
-      } else {
-        // Create top-level component
-        store.addComponent({
-          x: Math.max(50, graphPt.x - COMP_WIDTH / 2),
-          y: Math.max(50, graphPt.y - COMP_HEIGHT / 2),
-        });
-      }
-    } catch (err) { console.warn('[CompEditor] DblClick error:', err); }
+  const handleAddComponent = useCallback(() => {
+    const store = useDiagramStore.getState();
+    const parent = store.selectedComponentId;
+    if (parent) {
+      // Create child inside selected parent
+      const parentComp = store.diagram.components?.find((c) => c.id === parent);
+      const relX = 20 + Math.random() * 80;
+      const relY = 40 + Math.random() * 60;
+      store.addComponent({ x: relX, y: relY }, parent);
+    } else {
+      const x = 150 + Math.random() * 400;
+      const y = 100 + Math.random() * 200;
+      store.addComponent({ x, y });
+    }
   }, []);
 
   return (
-    <div ref={containerRef} className="comp-canvas-container" onDoubleClick={handleDoubleClick} />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {showToolbar && (
+        <div style={{
+          position: 'absolute', top: 8, left: 8, zIndex: 100,
+          background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
+          padding: '4px 6px', boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+        }}>
+          <Tooltip title="选中组件时创建子组件，未选中时创建顶层组件">
+            <Button size="small" icon={<PlusOutlined />} onClick={handleAddComponent}>组件</Button>
+          </Tooltip>
+          <Button size="small" type="text" onClick={() => setShowToolbar(false)}
+            style={{ fontSize: 10, marginLeft: 4 }}>✕</Button>
+        </div>
+      )}
+      {!showToolbar && (
+        <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 100 }}>
+          <Button size="small" type="dashed" onClick={() => setShowToolbar(true)}>🔧</Button>
+        </div>
+      )}
+      <div ref={containerRef} className="comp-canvas-container" />
+    </div>
   );
 };
 

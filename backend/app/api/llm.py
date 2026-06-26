@@ -2,6 +2,7 @@
 
 import logging
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.models.uml import (
     LlmRequest, LlmResponse,
@@ -10,7 +11,7 @@ from app.models.uml import (
 )
 from app.services.llm_service import chat
 from app.services.code_generator import (
-    SUPPORTED_LANGUAGES, generate_code, optimize_uml,
+    SUPPORTED_LANGUAGES, generate_code, optimize_uml, optimize_project,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,3 +67,24 @@ async def optimize_uml_endpoint(req: UmlOptimizeRequest):
     except Exception as e:
         logger.exception(f"UML optimization failed: {e}")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+
+
+class GlobalOptimizeRequest(BaseModel):
+    class_diagram: dict | None = None
+    sequence_diagram: dict | None = None
+    component_diagram: dict | None = None
+    instructions: str = ""
+
+
+@router.post("/optimize-project")
+async def optimize_project_endpoint(req: GlobalOptimizeRequest):
+    """Cross-validate and globally optimize all diagrams in a project."""
+    try:
+        result = await optimize_project(
+            req.class_diagram, req.sequence_diagram,
+            req.component_diagram, req.instructions,
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Global optimization failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -47,6 +47,16 @@
   flex-shrink: 0;
 }
 
+.uml-class-ifaces {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+.uml-iface-row {
+  margin: 1px 0;
+}
+.uml-iface.provided { color: #389e0d; margin-right: 4px; }
+.uml-iface.required { color: #cf1322; margin-right: 4px; }
+
 .uml-class-attrs,
 .uml-class-methods {
   flex: 1;

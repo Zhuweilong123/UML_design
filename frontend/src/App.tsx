@@ -118,11 +118,11 @@ const App: React.FC = () => {
             {showTestCaseInCanvas ? (
               <span>双击单元格编辑用例 | 支持增删查改 | 全量/增量生成测试代码</span>
             ) : diagramType === 'sequence' ? (
-              <span>双击画布添加生命线 | 点击生命线A→再点生命线B创建消息 | Ctrl+滚轮缩放</span>
+              <span>工具栏添加元素 | 点击生命线A→再点生命线B创建消息 | Ctrl+滚轮缩放</span>
             ) : diagramType === 'component' ? (
-              <span>双击画布添加组件 | 拖拽端口创建依赖 | Ctrl+滚轮缩放 | 空格平移</span>
+              <span>工具栏添加组件 | 拖拽端口创建依赖 | Ctrl+滚轮缩放 | 空格平移</span>
             ) : (
-              <span>双击画布添加类 | 拖拽端口创建连接 | Ctrl+滚轮缩放 | 空格平移</span>
+              <span>工具栏添加类 | 拖拽端口创建连接 | Ctrl+滚轮缩放 | 空格平移</span>
             )}
             <span>Ctrl+Z 撤销 | Ctrl+Y 重做</span>
           </div>

@@ -29,6 +29,37 @@ export interface SeqMessage {
   note: string;         // functional comment / 功能备注
 }
 
+// UML 2.5.1 Combined Fragment
+
+export type FragmentType = 'loop' | 'alt' | 'opt' | 'break' | 'par' | 'critical' | 'neg';
+
+export const FRAGMENT_LABELS: Record<FragmentType, string> = {
+  loop: 'loop', alt: 'alt', opt: 'opt', break: 'break',
+  par: 'par', critical: 'critical', neg: 'neg',
+};
+
+export interface SeqFragment {
+  id: string;
+  type: FragmentType;
+  label: string;
+  x: number;
+  width: number;
+  y_start: number;
+  y_end: number;
+}
+
+export function createDefaultFragment(y: number): SeqFragment {
+  return {
+    id: `frag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    type: 'loop',
+    label: '',
+    x: 80,
+    width: 300,
+    y_start: y,
+    y_end: y + 120,
+  };
+}
+
 export function createDefaultLifeline(x?: number): SeqLifeline {
   return {
     id: `life_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
