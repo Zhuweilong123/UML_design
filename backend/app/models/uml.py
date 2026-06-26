@@ -71,6 +71,8 @@ class UmlClass(BaseModel):
     position: Position = Field(default_factory=Position)
     size: Size = Field(default_factory=Size)
     note: str = ""
+    provided_interfaces: list[str] = Field(default_factory=list)  # UML 2.5.1 lollipop
+    required_interfaces: list[str] = Field(default_factory=list)  # UML 2.5.1 socket
 
 
 # ---------- UML Relation ----------
@@ -97,6 +99,18 @@ class SeqLifeline(BaseModel):
     class_ref: str = ""   # optional: UmlClass.id from class diagram
     x: float = 100
     activations: list[float] = Field(default_factory=list)  # y-offsets of activation bars
+
+
+class SeqFragment(BaseModel):
+    """UML 2.5.1 Combined Fragment: loop, alt, opt, break, par, etc."""
+    model_config = {"extra": "ignore"}
+    id: str
+    type: str = "loop"  # loop | alt | opt | break | par | critical | neg
+    label: str = ""      # guard condition, e.g. "[for each item]"
+    x: float = 80        # left X position
+    width: float = 280    # fragment width
+    y_start: float = 0   # top Y position
+    y_end: float = 100    # bottom Y position
 
 
 class SeqMessage(BaseModel):
@@ -148,6 +162,7 @@ class UmlDiagram(BaseModel):
     # --- Sequence diagram fields ---
     lifelines: list[SeqLifeline] = Field(default_factory=list)
     messages: list[SeqMessage] = Field(default_factory=list)
+    fragments: list[SeqFragment] = Field(default_factory=list)
     # --- Component diagram fields ---
     components: list[CompNode] = Field(default_factory=list)
     comp_relations: list[CompRelation] = Field(default_factory=list)

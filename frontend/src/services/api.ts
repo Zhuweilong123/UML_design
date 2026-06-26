@@ -246,6 +246,18 @@ export async function saveReview(review: {
   return data;
 }
 
+// ─── Global Optimization ───────────────────────────────
+
+export async function optimizeProject(req: {
+  class_diagram?: Record<string, unknown>;
+  sequence_diagram?: Record<string, unknown>;
+  component_diagram?: Record<string, unknown>;
+  instructions?: string;
+}): Promise<Record<string, unknown>> {
+  const { data } = await api.post('/llm/optimize-project', req);
+  return data;
+}
+
 // ─── Project (.umlproj) ─────────────────────────────────
 
 export async function saveProject(project: Project, filename?: string): Promise<{

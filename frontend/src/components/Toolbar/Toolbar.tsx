@@ -25,7 +25,7 @@ import {
   exportMarkdown, generateCode as apiGenerateCode,
   optimizeUml as apiOptimizeUml, createPipeline,
   browseDirectory, type BrowseResult,
-  saveGeneratedCode,
+  saveGeneratedCode, optimizeProject as apiOptimizeProject,
 } from '../../services/api';
 import './Toolbar.css';
 
@@ -78,6 +78,49 @@ const Toolbar: React.FC = () => {
   const [optimizeInstructions, setOptimizeInstructions] = useState('');
   const [optimizing, setOptimizing] = useState(false);
   const [gridSettingsVisible, setGridSettingsVisible] = useState(false);
+  const [globalOptimizeVisible, setGlobalOptimizeVisible] = useState(false);
+  const [globalInstructions, setGlobalInstructions] = useState('');
+  const [globalOptimizing, setGlobalOptimizing] = useState(false);
+
+  // ── Global optimize handler ─────────────────────────
+  const handleGlobalOptimize = async () => {
+    setGlobalOptimizing(true);
+    const proj = useDiagramStore.getState().project;
+    const classD = proj.diagrams.find(d => d.diagram_type === 'class');
+    const seqD = proj.diagrams.find(d => d.diagram_type === 'sequence');
+    const compD = proj.diagrams.find(d => d.diagram_type === 'component');
+    try {
+      const result = await apiOptimizeProject({
+        class_diagram: classD as any,
+        sequence_diagram: seqD as any,
+        component_diagram: compD as any,
+        instructions: globalInstructions,
+      });
+      message.success('全局优化完成');
+      setGlobalOptimizeVisible(false);
+      // Apply optimized diagrams back to project
+      const optimized = result.optimized as any;
+      const store = useDiagramStore.getState();
+      const diagrams = [...store.project.diagrams];
+      if (optimized?.class) {
+        const idx = diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
+        if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.class as any };
+      }
+      if (optimized?.sequence) {
+        const idx = diagrams.findIndex(d => d.diagram_type === 'sequence');
+        if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.sequence as any };
+      }
+      if (optimized?.component) {
+        const idx = diagrams.findIndex(d => d.diagram_type === 'component');
+        if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.component as any };
+      }
+      store.setProject({ ...store.project, diagrams });
+      message.success('全局优化结果已应用，请查看各图');
+    } catch (e) {
+      message.error('全局优化失败: ' + String(e));
+    }
+    setGlobalOptimizing(false);
+  };
 
   // ── Ctrl+S global save ──────────────────────────────
   useEffect(() => {
@@ -240,17 +283,6 @@ const Toolbar: React.FC = () => {
 
   // Open optimize dialog first, then send to LLM
   const handleOptimizeClick = () => {
-    const dt = diagram.diagram_type || 'class';
-    const data = dt === 'sequence'
-      ? (diagram.lifelines || [])
-      : dt === 'component'
-      ? (diagram.components || [])
-      : diagram.classes;
-    if (!data.length) {
-      const hint = dt === 'sequence' ? '生命线' : dt === 'component' ? '组件' : '类';
-      message.warning(`请先添加${hint}到${dt === 'component' ? '组件图' : dt === 'sequence' ? '时序图' : '图表'}中`);
-      return;
-    }
     setOptimizeInstructions('');
     setOptimizeVisible(true);
   };
@@ -303,6 +335,8 @@ const Toolbar: React.FC = () => {
 
   return (
     <div className="toolbar">
+      {/* Row 1: File + Diagrams + Undo/Redo + LLM */}
+      <div className="toolbar-row">
       <div className="toolbar-left">
         {/* File Ops */}
         <Tooltip title="新建">
@@ -372,9 +406,13 @@ const Toolbar: React.FC = () => {
         <Tooltip title="重做 Ctrl+Y">
           <Button icon={<RedoOutlined />} disabled={redoStack.length === 0} onClick={redo} />
         </Tooltip>
+      </div>
+      <div className="toolbar-right" />
+      </div>
 
-        <Divider type="vertical" />
-
+      {/* Row 2: LLM + Export + View */}
+      <div className="toolbar-row">
+      <div className="toolbar-left">
         {/* LLM */}
         <Select
           value={selectedLanguage}
@@ -391,6 +429,11 @@ const Toolbar: React.FC = () => {
         <Tooltip title="LLM 优化 UML 设计 (会弹窗收集需求)">
           <Button icon={<RobotOutlined />} onClick={handleOptimizeClick}>
             优化设计
+          </Button>
+        </Tooltip>
+        <Tooltip title="全局综合优化（类图+时序图+组件图交叉验证）">
+          <Button icon={<RobotOutlined />} onClick={() => setGlobalOptimizeVisible(true)} style={{ color: '#722ed1' }}>
+            全局优化
           </Button>
         </Tooltip>
         <Tooltip title="启动自动化流水线">
@@ -428,8 +471,6 @@ const Toolbar: React.FC = () => {
 
         <Divider type="vertical" />
 
-        <Divider type="vertical" />
-
         <Tooltip title={showTestCaseInCanvas ? '返回UML画布' : '用例检视'}>
           <Button
             icon={<TableOutlined />}
@@ -450,6 +491,7 @@ const Toolbar: React.FC = () => {
         <Tooltip title="重置缩放">
           <Button icon={<ExpandOutlined />} onClick={handleZoomReset} />
         </Tooltip>
+      </div>
       </div>
 
       {/* ── File Open Dialog with folder browsing ────── */}
@@ -580,7 +622,7 @@ const Toolbar: React.FC = () => {
 
       {/* ── Optimize UML Dialog ──────────────────────── */}
       <Modal
-        title={diagram.diagram_type === 'sequence' ? '时序图优化' : diagram.diagram_type === 'component' ? '组件图优化' : 'UML 设计优化'}
+        title={(diagram.diagram_type === 'sequence' ? '时序图' : diagram.diagram_type === 'component' ? '组件图' : 'UML') + (diagram.classes.length || (diagram.lifelines || []).length || (diagram.components || []).length ? '优化' : '生成')}
         open={optimizeVisible}
         onCancel={() => setOptimizeVisible(false)}
         onOk={handleOptimizeConfirm}
@@ -663,6 +705,34 @@ const Toolbar: React.FC = () => {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ── Global Optimize Modal ──────────────────── */}
+      <Modal
+        title="全局综合优化"
+        open={globalOptimizeVisible}
+        onCancel={() => setGlobalOptimizeVisible(false)}
+        onOk={handleGlobalOptimize}
+        confirmLoading={globalOptimizing}
+        okText="提交优化"
+        cancelText="取消"
+        width={650}
+      >
+        <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
+          LLM 将同时分析项目中的类图、时序图、组件图，进行交叉一致性校验和综合优化。
+          {(() => {
+            const proj = useDiagramStore.getState().project;
+            const types = proj.diagrams.map(d => d.diagram_type === 'sequence' ? '时序图' : d.diagram_type === 'component' ? '组件图' : '类图');
+            return <>当前项目包含：{types.join('、')}</>;
+          })()}
+        </p>
+        <Input.TextArea
+          value={globalInstructions}
+          onChange={(e) => setGlobalInstructions(e.target.value)}
+          placeholder={'输入全局优化需求，如：\n• 检查时序图引用的方法是否在类图中都有定义\n• 优化组件间依赖关系\n• 统一命名规范\n• 补充缺失的接口定义\n留空则进行通用综合优化'}
+          rows={6}
+          autoFocus
+        />
       </Modal>
     </div>
   );

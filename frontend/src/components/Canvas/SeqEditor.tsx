@@ -3,16 +3,18 @@
  * Reuses the same X6 patterns as UMLEditor (isInternalUpdate, sync effect, etc.)
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { Graph, Node, Edge } from '@antv/x6';
 import { History } from '@antv/x6-plugin-history';
 import { Transform } from '@antv/x6-plugin-transform';
 import { Selection } from '@antv/x6-plugin-selection';
 import { Snapline } from '@antv/x6-plugin-snapline';
+import { Button, Tooltip } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
 import type { SeqLifeline, SeqMessage, MessageType } from '../../types/sequence';
-import { MESSAGE_TYPE_LABELS } from '../../types/sequence';
+import { MESSAGE_TYPE_LABELS, FRAGMENT_LABELS, type FragmentType } from '../../types/sequence';
 import './SeqEditor.css';
 
 // ── Register X6 shapes (once) ────────────────────────
@@ -25,6 +27,7 @@ function ensureShapesRegistered() {
   // Lifeline: header rect + dashed body line
   Graph.registerNode('seq-lifeline', {
     inherit: 'rect',
+    resizable: false,
     markup: [
       { tagName: 'rect', selector: 'body' },
       {
@@ -56,7 +59,38 @@ function ensureShapesRegistered() {
     ports: {},
   });
 
-  console.debug('[SeqEditor] X6 sequence shapes registered');
+  // Fragment: draggable, resizable overlay with label tab
+  Graph.registerNode('seq-fragment', {
+    inherit: 'rect',
+    markup: [
+      { tagName: 'rect', selector: 'body' },
+      {
+        tagName: 'foreignObject', selector: 'fo',
+        children: [{
+          tagName: 'div', ns: 'http://www.w3.org/1999/xhtml', selector: 'label',
+          style: {
+            position: 'absolute', top: 0, left: 0,
+            fontSize: '11px', fontWeight: 600, fontFamily: 'Consolas, monospace',
+            color: '#333', background: '#fff9e6', padding: '1px 6px',
+            border: '1px solid #d9d9d9', borderRadius: '0 0 4px 0',
+            whiteSpace: 'nowrap',
+          },
+        }],
+      },
+    ],
+    attrs: {
+      body: {
+        stroke: '#555', strokeWidth: 1.5, fill: 'rgba(230,247,255,0.15)',
+        rx: 2, ry: 2,
+        magnet: true,
+      },
+      fo: { refWidth: '100%', refHeight: '20' },
+      label: { html: '' },
+    },
+    ports: {},
+  });
+
+  console.log('[SeqEditor] X6 sequence shapes registered');
 }
 
 // ── HTML builders ────────────────────────────────────
@@ -120,24 +154,25 @@ const SeqEditor: React.FC = () => {
     });
 
     graph.use(new History({ enabled: true }));
-    graph.use(new Transform({ resizing: false, rotating: false }));
+    graph.use(new Transform({ resizing: true, rotating: false }));
     graph.use(new Selection({ enabled: true, rubberband: true, showNodeSelectionBox: true }));
     graph.use(new Snapline({ enabled: true, sharp: true }));
 
-    // Click-to-click message creation
+    // Click-to-click message creation (lifelines only)
     graph.on('node:click', ({ node }) => {
+      if (node.shape === 'seq-fragment') {
+        (graph as any).__selectedFragment = node.id;
+        return;
+      }
       const store = useDiagramStore.getState();
       if (store.selectedLifelineId === node.id) {
-        // Same lifeline clicked again → self-message
         store.addMessage(node.id, node.id);
         return;
       }
       if (store.selectedLifelineId) {
-        // Second lifeline clicked → create message
         store.addMessage(store.selectedLifelineId, node.id);
         return;
       }
-      // First click: select lifeline
       selectLifeline(node.id);
       setRightPanelTab('properties');
     });
@@ -145,6 +180,39 @@ const SeqEditor: React.FC = () => {
     graph.on('blank:click', () => {
       selectLifeline(null);
       selectMessage(null);
+      (graph as any).__selectedFragment = null;
+    });
+
+    // Track fragment moves and resizes (only when user-initiated)
+    graph.on('node:moved', ({ node }) => {
+      if (node.shape === 'seq-fragment' && !isInternalUpdate.current) {
+        const store = useDiagramStore.getState();
+        store.updateFragment(node.id, {
+          x: node.position().x,
+          y_start: node.position().y,
+        } as any);
+      }
+    });
+    graph.on('node:resized', ({ node }) => {
+      if (node.shape === 'seq-fragment' && !isInternalUpdate.current) {
+        const store = useDiagramStore.getState();
+        store.updateFragment(node.id, {
+          x: node.position().x,
+          width: node.size().width,
+          y_start: node.position().y,
+          y_end: node.position().y + node.size().height,
+        } as any);
+      }
+    });
+
+    graph.on('node:click', ({ node }) => {
+      if (node.shape === 'seq-fragment') {
+        // Select fragment for deletion
+        const store = useDiagramStore.getState();
+        // Store the fragment ID temporarily for delete key
+        (graph as any).__selectedFragment = node.id;
+        return;
+      }
     });
 
     graph.on('node:moved', ({ node }) => {
@@ -210,8 +278,13 @@ const SeqEditor: React.FC = () => {
       } else if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault(); store.redo();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Delete selected lifeline or message via store
-        if (store.selectedMessageId) {
+        // Delete selected element
+        const fragId = (graph as any).__selectedFragment;
+        if (fragId) {
+          e.preventDefault();
+          store.removeFragment(fragId);
+          (graph as any).__selectedFragment = null;
+        } else if (store.selectedMessageId) {
           e.preventDefault();
           store.removeMessage(store.selectedMessageId);
         } else if (store.selectedLifelineId) {
@@ -388,6 +461,42 @@ const SeqEditor: React.FC = () => {
         }
       });
 
+      // Sync fragments (UML 2.5.1 combined fragments)
+      const fragments = diagram.fragments || [];
+      const fragIds = new Set(fragments.map((f) => f.id));
+      // Remove deleted fragments
+      graph.getNodes().forEach((n) => {
+        if (n.shape === 'seq-fragment' && !fragIds.has(n.id)) {
+          try { graph.removeCell(n.id); } catch { /* ignore */ }
+        }
+      });
+      // Add/update fragments: only position on creation, not on every sync
+      const existingFragIds = new Set(
+        graph.getNodes().filter((n) => n.shape === 'seq-fragment').map((n) => n.id)
+      );
+      fragments.forEach((f) => {
+        const label = `${f.type}${f.label ? ` ${f.label}` : ''}`;
+        try {
+          if (!existingFragIds.has(f.id)) {
+            // New fragment — add at stored position
+            graph.addNode({
+              id: f.id, shape: 'seq-fragment',
+              x: f.x || 80, y: f.y_start || 0,
+              width: f.width || 280,
+              height: Math.max(60, (f.y_end || 100) - (f.y_start || 0)),
+            });
+          }
+          // Always update label + style
+          const fn = graph.getCellById(f.id) as Node;
+          if (fn) {
+            fn.setAttrByPath('label/html', `<span>${label}</span>`);
+            fn.setAttrByPath('body/stroke', f.type === 'alt' ? '#722ed1' :
+              f.type === 'loop' ? '#1890ff' : '#555');
+            fn.setAttrByPath('body/strokeDasharray', f.type === 'opt' ? '4,2' : '');
+          }
+        } catch (e) { /* ignore */ }
+      });
+
       prevLifelineIds.current = currentLIds;
       isInternalUpdate.current = false;
 
@@ -413,27 +522,69 @@ const SeqEditor: React.FC = () => {
     } catch (e) { /* ignore */ }
   }, [diagram.grid_visible, diagram.grid_size, diagram.grid_color, diagram.grid_thickness]);
 
-  // ── Double-click: add lifeline ─────────────────────
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    try {
-      const x = e.clientX - rect.left;
-      // Use raw screen x for new lifeline — clientToLocal can give odd values
-      addLifeline(Math.max(50, x - 70));
-    } catch (err) {
-      console.warn('[SeqEditor] DblClick error:', err);
-    }
+  // ── Floating toolbar ────────────────────────────────
+  const [showToolbar, setShowToolbar] = useState(true);
+
+  const handleAddLifeline = useCallback(() => {
+    const x = 150 + Math.random() * 300;
+    addLifeline(x);
   }, [addLifeline]);
 
+  const handleAddFragment = useCallback((type: FragmentType) => {
+    const store = useDiagramStore.getState();
+    const msgs = store.diagram.messages || [];
+    const y = msgs.length > 0
+      ? Math.max(...msgs.map((m) => (m.y || 100))) + 60
+      : 200;
+    store.addFragment(y);
+    // Set the fragment type
+    const frags = store.diagram.fragments || [];
+    if (frags.length > 0) {
+      store.updateFragment(frags[frags.length - 1].id, {
+        type,
+        y_start: y,
+        y_end: y + 120,
+      } as any);
+    }
+  }, []);
+
   return (
-    <div
-      ref={containerRef}
-      className="seq-canvas-container"
-      onDoubleClick={handleDoubleClick}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Floating toolbar */}
+      {showToolbar && (
+        <div style={{
+          position: 'absolute', top: 8, left: 8, zIndex: 100,
+          background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
+          padding: '4px 6px', display: 'flex', gap: 4, alignItems: 'center',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+          flexWrap: 'wrap', maxWidth: 360,
+        }}>
+          <Tooltip title="添加生命线">
+            <Button size="small" icon={<PlusOutlined />} onClick={handleAddLifeline}>生命线</Button>
+          </Tooltip>
+          <span style={{ fontSize: 11, color: '#999', margin: '0 2px' }}>片段:</span>
+          {(Object.keys(FRAGMENT_LABELS) as FragmentType[]).map((t) => (
+            <Tooltip key={t} title={`添加 ${FRAGMENT_LABELS[t]} 片段`}>
+              <Button size="small" onClick={() => handleAddFragment(t)}
+                style={{ fontSize: 11, padding: '0 6px' }}>{FRAGMENT_LABELS[t]}</Button>
+            </Tooltip>
+          ))}
+          <Button size="small" type="text"
+            onClick={() => setShowToolbar(false)}
+            style={{ fontSize: 10, marginLeft: 4 }}>✕</Button>
+        </div>
+      )}
+
+      {!showToolbar && (
+        <div style={{
+          position: 'absolute', top: 8, left: 8, zIndex: 100,
+        }}>
+          <Button size="small" type="dashed" onClick={() => setShowToolbar(true)}>🔧</Button>
+        </div>
+      )}
+
+      <div ref={containerRef} className="seq-canvas-container" />
+    </div>
   );
 };
 

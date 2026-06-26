@@ -58,6 +58,8 @@ export interface UmlClass {
   position: Position;
   size: Size;
   note: string;
+  provided_interfaces: string[];
+  required_interfaces: string[];
 }
 
 export interface UmlRelation {
@@ -84,6 +86,7 @@ export interface UmlDiagram {
   // Sequence diagram
   lifelines?: SeqLifeline[];
   messages?: SeqMessage[];
+  fragments?: import('./sequence').SeqFragment[];
   // Component diagram
   components?: CompNode[];
   comp_relations?: CompRelation[];
@@ -107,6 +110,7 @@ export function createDefaultDiagram(name = 'Untitled'): UmlDiagram {
     relations: [],
     lifelines: [],
     messages: [],
+    fragments: [],
     components: [],
     comp_relations: [],
     grid_visible: true,
@@ -130,6 +134,8 @@ export function createDefaultClass(position?: Position): UmlClass {
     position: position || { x: 100, y: 100 },
     size: { width: 200, height: 150 },
     note: '',
+    provided_interfaces: [],
+    required_interfaces: [],
   };
 }
 

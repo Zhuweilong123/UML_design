@@ -78,6 +78,24 @@ const PropertyPanel: React.FC = () => {
               placeholder="添加备注..."
             />
           </Form.Item>
+          <Form.Item label="提供的接口 (◉ provided)">
+            <TextArea
+              value={(selectedClass.provided_interfaces || []).join('\n')}
+              onChange={(e) => handleClassChange('provided_interfaces',
+                e.target.value.split('\n').filter((s: string) => s.trim()))}
+              rows={2}
+              placeholder="IService&#10;IRepository"
+            />
+          </Form.Item>
+          <Form.Item label="依赖的接口 (◡ required)">
+            <TextArea
+              value={(selectedClass.required_interfaces || []).join('\n')}
+              onChange={(e) => handleClassChange('required_interfaces',
+                e.target.value.split('\n').filter((s: string) => s.trim()))}
+              rows={2}
+              placeholder="IDatabase&#10;ILogger"
+            />
+          </Form.Item>
         </Form>
 
         {/* Attributes */}

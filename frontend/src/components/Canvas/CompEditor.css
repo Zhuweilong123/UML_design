@@ -27,12 +27,26 @@
   padding: 4px 0; border-bottom: 1px solid #f0d080; margin-bottom: 6px;
 }
 
-.comp-node .comp-ifaces {
-  font-size: 10px; margin-top: 4px;
+.comp-block {
+  margin: 4px 0; padding: 2px 4px; border-top: 1px solid #f0d080;
+}
+.comp-block-label {
+  font-size: 8px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px;
+}
+
+.comp-lollipop {
+  display: inline-block; width: 14px; height: 14px; line-height: 14px;
+  border: 1.5px solid #389e0d; border-radius: 50%; text-align: center;
+  font-size: 9px; color: #389e0d; margin-right: 2px;
+}
+.comp-socket {
+  display: inline-block; width: 14px; height: 10px; line-height: 12px;
+  border: 1.5px solid #cf1322; border-radius: 0 0 10px 10px; text-align: center;
+  font-size: 9px; color: #cf1322; margin-right: 2px;
 }
 
 .comp-node .comp-iface {
-  padding: 1px 4px; margin: 2px 0;
+  padding: 1px 0; margin: 1px 0; font-size: 11px;
 }
 .comp-node .comp-iface.provided { color: #389e0d; }
 .comp-node .comp-iface.required { color: #cf1322; }

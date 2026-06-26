@@ -1,6 +1,7 @@
 """Code generation service – generates code in 12 languages from UML diagrams."""
 
 import json
+import logging
 from app.models.uml import UmlDiagram
 from app.services.llm_service import chat
 from app.services.tools import clean_llm_json_response
@@ -47,12 +48,18 @@ def _build_class_prompt(diagram: UmlDiagram, language: str) -> str:
             static = "static " if m.is_static else ""
             abstract = "abstract " if m.is_abstract else ""
             methods.append(f"    {m.visibility} {abstract}{static}{m.name}({m.params}): {m.return_type}")
-        # Include class notes (business logic requirements)
+        # Include class notes + interfaces
         note_block = ""
         if c.note.strip():
             note_block = f"\n  Business Rules: {c.note}"
+        ifaces = []
+        if c.provided_interfaces:
+            ifaces.append(f"  ◉ Provides: {', '.join(c.provided_interfaces)}")
+        if c.required_interfaces:
+            ifaces.append(f"  ◡ Requires: {', '.join(c.required_interfaces)}")
+        iface_block = "\n" + "\n".join(ifaces) if ifaces else ""
         classes_desc.append(
-            f"Class: {c.name} (stereotype={c.stereotype}){note_block}\n"
+            f"Class: {c.name} (stereotype={c.stereotype}){note_block}{iface_block}\n"
             + "Attributes:\n" + "\n".join(attrs or ["    (none)"]) + "\n"
             + "Methods:\n" + "\n".join(methods or ["    (none)"])
         )
@@ -223,7 +230,6 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
         cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        import logging
         logger = logging.getLogger(__name__)
         logger.warning(f"[CodeGen] JSON parse failed for code generation, raw response ({len(response)} chars): {response[:300]}")
         return {}
@@ -240,7 +246,6 @@ async def generate_integrated_code(
 
     Returns (files_dict, prompt_text).
     """
-    import logging
     _logger = logging.getLogger(__name__)
 
     if not class_diagram:
@@ -364,11 +369,181 @@ async def generate_tests(
         cleaned = clean_llm_json_response(response)
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        import logging
         logger = logging.getLogger(__name__)
         logger.warning(f"[TestGen] JSON parse failed for test generation, raw response ({len(response)} chars): {response[:300]}")
         # Don't save raw response as .py — it's not valid Python code
         return {}
+
+
+async def optimize_project(
+    class_diagram: dict | None,
+    sequence_diagram: dict | None,
+    component_diagram: dict | None,
+    instructions: str = "",
+) -> dict:
+    """Cross-validate and optimize all three diagrams together."""
+    _logger = logging.getLogger(__name__)
+    _logger.info("[OptimizeProject] Global optimization request")
+
+    # Load design guides
+    guide_parts = []
+    try:
+        from pathlib import Path as _P2
+        _guide_dir = _P2(__file__).resolve().parent.parent.parent.parent / "uml_guide"
+        for _type in ["class_diagram", "sequence_diagram", "component_diagram"]:
+            _gf = _guide_dir / f"{_type}_guide.md"
+            if _gf.exists():
+                guide_parts.append(_gf.read_text(encoding="utf-8"))
+                _logger.info(f"[OptimizeProject] Loaded guide: {_gf.name}")
+    except Exception as e:
+        _logger.warning(f"[OptimizeProject] Failed to load guides: {e}")
+    global_guide = "\n\n".join(guide_parts) if guide_parts else ""
+    _logger.info(f"[OptimizeProject] Loaded {len(guide_parts)} guide files")
+
+    # Collect existing diagram data
+    parts = []
+    if class_diagram and (class_diagram.get("classes") or class_diagram.get("relations")):
+        parts.append(f"""## Class Diagram:
+```json
+{json.dumps(class_diagram, indent=2, ensure_ascii=False)}
+```""")
+    if sequence_diagram and (sequence_diagram.get("lifelines") or sequence_diagram.get("messages")):
+        parts.append(f"""## Sequence Diagram:
+```json
+{json.dumps(sequence_diagram, indent=2, ensure_ascii=False)}
+```""")
+    if component_diagram and (component_diagram.get("components") or component_diagram.get("comp_relations")):
+        parts.append(f"""## Component Diagram:
+```json
+{json.dumps(component_diagram, indent=2, ensure_ascii=False)}
+```""")
+
+    is_empty = len(parts) == 0
+
+    if is_empty:
+        # Generate a complete design from scratch
+        prompt = f"""Generate a complete UML system design from the following requirements.
+Include ALL three diagram types: class diagram, sequence diagram, and component diagram.
+
+## Design Requirements:
+{instructions or "Design a well-structured software system with clear class hierarchy, interaction flows, and component architecture."}
+
+## Output Format — return a JSON object with ALL three diagrams:
+```json
+{{
+  "optimized": {{
+    "class": {{
+      "name": "Design",
+      "classes": [{{"id": "...", "name": "...", "stereotype": "class", "attributes": [...], "methods": [...], "relations": [...]}}],
+      "relations": [{{"id": "...", "source": "...", "target": "...", "type": "association"}}]
+    }},
+    "sequence": {{
+      "lifelines": [{{"id": "...", "name": "...", "x": 100}}],
+      "messages": [{{"id": "...", "from_lifeline": "...", "to_lifeline": "...", "label": "method()", "type": "sync", "order": 1}}]
+    }},
+    "component": {{
+      "components": [{{"id": "...", "name": "...", "x": 100, "y": 100, "provided_interfaces": [...], "required_interfaces": [...]}}],
+      "comp_relations": [{{"id": "...", "source": "...", "target": "...", "type": "dependency"}}]
+    }}
+  }},
+  "consistency_report": [],
+  "changes_summary": "Created new design from requirements",
+  "diff": "All diagrams generated from scratch"
+}}
+```
+Only output the JSON object, no other text.
+"""
+    else:
+        prompt = f"""Cross-validate and optimize the following UML diagrams as a complete system design.
+
+{chr(10).join(parts)}
+
+## Cross-Validation Rules:
+1. Sequence diagram lifelines MUST reference classes that exist in the class diagram
+2. Sequence diagram method calls MUST match method signatures in the class diagram
+3. Component diagram interfaces MUST be consistent with class diagram provided/required interfaces
+4. Flag any inconsistencies found between diagrams
+5. If any diagram is missing, generate it based on the others
+6. Optimize each diagram while maintaining consistency across all three
+
+## User Instructions:
+{instructions or "Overall system optimization: improve consistency, reduce duplication, ensure cross-diagram coherence"}
+
+## Output Format:
+```json
+{{
+  "optimized": {{
+    "class": {{ ... }},
+    "sequence": {{ ... }},
+    "component": {{ ... }}
+  }},
+  "consistency_report": [
+    {{"severity": "error|warning", "msg": "..."}}
+  ],
+  "changes_summary": "summary",
+  "diff": "what changed"
+}}
+```
+Only output the JSON object, no other text.
+"""
+    # Save prompt for diagnostics
+    try:
+        from pathlib import Path as _P
+        _log_d = _P(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_d.mkdir(exist_ok=True)
+        _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
+        _f = _log_d / f"llm_global_optimize_{_ts}.md"
+        _f.write_text(f"# Global Optimize\n\n## Mode: {'GENERATE' if is_empty else 'OPTIMIZE'}\n\n## Prompt\n```\n{prompt}\n```", encoding="utf-8")
+        _logger.info(f"[OptimizeProject] Prompt saved: {_f}")
+    except Exception:
+        pass
+
+    full_system = (global_guide + "\n\nYou are an expert software architect specializing in multi-view UML system design. Cross-validate diagrams for consistency.") if global_guide else "You are an expert software architect specializing in multi-view UML system design. Cross-validate diagrams for consistency."
+
+    # Save prompt + response for diagnostics
+    try:
+        from pathlib import Path as _P3
+        _log_d = _P3(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_d.mkdir(exist_ok=True)
+        _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
+        _f = _log_d / f"llm_global_optimize_{_ts}.md"
+        _f.write_text(f"# Global Optimize ({'GENERATE' if is_empty else 'OPTIMIZE'})\n\n## System Prompt\n```\n{full_system}\n```\n\n## User Prompt\n```\n{prompt}\n```", encoding="utf-8")
+        _logger.info(f"[OptimizeProject] Prompt saved: {_f}")
+    except Exception:
+        _f = None
+
+    response = await chat(
+        prompt=prompt,
+        system_prompt=full_system,
+        temperature=0.5,
+        max_tokens=8192,
+    )
+
+    # Append response to log
+    if _f:
+        try:
+            _current = _f.read_text(encoding="utf-8")
+            _f.write_text(_current + f"\n\n## Response\n```\n{response}\n```", encoding="utf-8")
+        except Exception:
+            pass
+
+    try:
+        cleaned = clean_llm_json_response(response)
+        result = json.loads(cleaned)
+        _logger.info(f"[OptimizeProject] Result keys: {list(result.keys())}")
+        return result
+    except json.JSONDecodeError:
+        _logger.warning("[OptimizeProject] JSON parse failed")
+        return {
+            "optimized": {
+                "class": class_diagram or {},
+                "sequence": sequence_diagram or {},
+                "component": component_diagram or {},
+            },
+            "consistency_report": [],
+            "changes_summary": "Failed to parse LLM response",
+            "diff": response,
+        }
 
 
 def _normalize_llm_output(data: dict) -> dict:
@@ -481,15 +656,36 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
         default_inst = "General design optimization: improve cohesion, reduce coupling, apply design patterns where appropriate."
         system = "You are an expert software architect specializing in UML design and design patterns. Always use +, -, # for visibility values."
 
-    prompt = f"""Analyze and optimize the following {type_hint}.
+    # Load design guide for this diagram type
+    guide_text = ""
+    try:
+        from pathlib import Path as _Path
+        guide_file = _Path(__file__).resolve().parent.parent.parent.parent / "uml_guide" / f"{dt}_diagram_guide.md"
+        if guide_file.exists():
+            guide_text = guide_file.read_text(encoding="utf-8")
+            logging.getLogger(__name__).info(f"[Optimize] Loaded design guide: {guide_file.name} ({len(guide_text)} chars)")
+    except Exception:
+        pass
 
-## Current Diagram:
+    # Detect empty diagram → generate from scratch instead of optimize
+    has_content = bool(
+        diagram.classes or diagram.lifelines or diagram.messages
+        or diagram.components or diagram.comp_relations
+    )
+
+    if has_content:
+        diagram_block = f"""## Current Diagram ({type_hint}):
 ```json
 {diagram.model_dump_json(indent=2)}
 ```
 
 ## User Instructions:
-{instructions or default_inst}
+{instructions or default_inst}"""
+    else:
+        diagram_block = f"""## Design Requirements:
+{instructions or "Create a new " + type_hint + " based on best practices."}"""
+
+    prompt = f"""{diagram_block}
 
 ## {rules}
 
@@ -503,9 +699,23 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 ```
 Only output the JSON object, no other text.
 """
+    full_system = (guide_text + "\n\n" + system) if guide_text else system
+
+    # Save prompt for diagnostics
+    try:
+        from pathlib import Path as _P
+        _log_d = _P(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_d.mkdir(exist_ok=True)
+        _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
+        _f = _log_d / f"llm_optimize_{_ts}.md"
+        _f.write_text(f"# System Prompt\n```\n{full_system}\n```\n\n# User Prompt\n```\n{prompt}\n```", encoding="utf-8")
+        logging.getLogger(__name__).info(f"[Optimize] Prompt saved: {_f}")
+    except Exception:
+        pass
+
     response = await chat(
         prompt=prompt,
-        system_prompt=system,
+        system_prompt=full_system,
         temperature=0.5,
         max_tokens=8192,
     )
@@ -617,7 +827,6 @@ async def adapt_code_to_uml(
             return fixed
         return existing_code
     except json.JSONDecodeError:
-        import logging
         _logger = logging.getLogger(__name__)
         _logger.warning(f"[adapt_code] JSON parse failed, keeping existing code")
         return existing_code
@@ -681,7 +890,6 @@ async def update_tests_incremental(
             return fixed
         return existing_tests
     except json.JSONDecodeError:
-        import logging
         _logger = logging.getLogger(__name__)
         _logger.warning(f"[update_tests] JSON parse failed, keeping existing tests")
         return existing_tests

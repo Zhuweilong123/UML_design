@@ -3,7 +3,9 @@
  * Uses proper X6 foreignObject pattern for HTML rendering.
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
+import { Button, Tooltip } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { Graph, Edge, Node } from '@antv/x6';
 import { History } from '@antv/x6-plugin-history';
 import { Transform } from '@antv/x6-plugin-transform';
@@ -160,13 +162,26 @@ function buildClassHTML(cls: UmlClass, selected: boolean): string {
     return `<div class="uml-method" style="${abs}${stat}">${m.visibility} ${m.name}(${m.params}): ${m.return_type}</div>`;
   }).join('');
 
+  const providedLines = (cls.provided_interfaces || []).map((i) =>
+    `<span class="uml-iface provided">◉ ${i}</span>`
+  ).join(' ');
+  const requiredLines = (cls.required_interfaces || []).map((i) =>
+    `<span class="uml-iface required">◡ ${i}</span>`
+  ).join(' ');
+  const ifaceHTML = (providedLines || requiredLines) ? `
+    <div class="uml-class-ifaces">
+      ${providedLines ? `<div class="uml-iface-row">${providedLines}</div>` : ''}
+      ${requiredLines ? `<div class="uml-iface-row">${requiredLines}</div>` : ''}
+    </div>
+    <div class="uml-class-divider"></div>` : '';
+
   return `
     <div class="uml-class-node ${selClass}">
       <div class="uml-class-header" style="${nameStyle}">
         ${stereotypeLabel}
         <div class="uml-class-name">${cls.name}</div>
       </div>
-      <div class="uml-class-divider"></div>
+      ${ifaceHTML}
       <div class="uml-class-attrs">${attrLines || '<div class="uml-empty">(no attributes)</div>'}</div>
       <div class="uml-class-divider"></div>
       <div class="uml-class-methods">${methodLines || '<div class="uml-empty">(no methods)</div>'}</div>
@@ -521,28 +536,35 @@ const UMLEditor: React.FC = () => {
     }
   }, [diagram.grid_visible, diagram.grid_size, diagram.grid_color, diagram.grid_thickness]);
 
-  // ── Double-click: add new class ──────────────────────
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    try {
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const pos = graph.clientToLocal(x, y);
-      useDiagramStore.getState().addClass({ x: pos.x, y: pos.y });
-    } catch (err) {
-      console.warn('[UML Editor] DblClick error:', err);
-    }
+  // ── Helpers ──────────────────────────────────────────
+  const handleAddClass = useCallback(() => {
+    const x = 150 + Math.random() * 400;
+    const y = 100 + Math.random() * 300;
+    useDiagramStore.getState().addClass({ x, y });
   }, []);
 
+  const [showToolbar, setShowToolbar] = useState(true);
+
   return (
-    <div
-      ref={containerRef}
-      className="uml-canvas-container"
-      onDoubleClick={handleDoubleClick}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {showToolbar && (
+        <div style={{
+          position: 'absolute', top: 8, left: 8, zIndex: 100,
+          background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
+          padding: '4px 6px', boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+        }}>
+          <Button size="small" icon={<PlusOutlined />} onClick={handleAddClass}>类</Button>
+          <Button size="small" type="text" onClick={() => setShowToolbar(false)}
+            style={{ fontSize: 10, marginLeft: 4 }}>✕</Button>
+        </div>
+      )}
+      {!showToolbar && (
+        <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 100 }}>
+          <Button size="small" type="dashed" onClick={() => setShowToolbar(true)}>🔧</Button>
+        </div>
+      )}
+      <div ref={containerRef} className="uml-canvas-container" />
+    </div>
   );
 };
 

@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import type { UmlDiagram, UmlClass, UmlRelation, Position, Size, Project } from '../types/uml';
 import { createDefaultDiagram, createDefaultClass, createDefaultRelation, createDefaultProject } from '../types/uml';
 import type { SeqLifeline, SeqMessage } from '../types/sequence';
-import { createDefaultLifeline, createDefaultMessage } from '../types/sequence';
+import { createDefaultLifeline, createDefaultMessage, createDefaultFragment } from '../types/sequence';
 import type { CompNode, CompRelation } from '../types/component';
 import { createDefaultComponent, createDefaultCompRelation } from '../types/component';
 
@@ -98,6 +98,11 @@ interface DiagramState {
   addMessage: (from: string, to: string) => void;
   removeMessage: (id: string) => void;
   updateMessage: (id: string, updates: Partial<SeqMessage>) => void;
+
+  // ── Fragment operations (UML 2.5.1) ───────────
+  addFragment: (y?: number) => void;
+  removeFragment: (id: string) => void;
+  updateFragment: (id: string, updates: Partial<import('../types/sequence').SeqFragment>) => void;
 
   // ── Component diagram operations ──────────────
 
@@ -483,6 +488,37 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       ...d,
       messages: (d.messages || []).map((m) =>
         m.id === id ? { ...m, ...updates } : m
+      ),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  // ── Fragment operations (UML 2.5.1) ─────────────────────
+  addFragment: (y) => {
+    const frag = createDefaultFragment(y || 150);
+    get().pushSnapshot('add_fragment');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      fragments: [...(d.fragments || []), frag],
+    }));
+    console.log('[Store] addFragment:', frag.type, frag.id);
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  removeFragment: (id) => {
+    get().pushSnapshot('remove_fragment');
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      fragments: (d.fragments || []).filter((f) => f.id !== id),
+    }));
+    set({ project, diagram: _activeDiagram(project), isModified: true });
+  },
+
+  updateFragment: (id, updates) => {
+    const project = _updateActiveDiagram(get().project, (d) => ({
+      ...d,
+      fragments: (d.fragments || []).map((f) =>
+        f.id === id ? { ...f, ...updates } : f
       ),
     }));
     set({ project, diagram: _activeDiagram(project), isModified: true });
