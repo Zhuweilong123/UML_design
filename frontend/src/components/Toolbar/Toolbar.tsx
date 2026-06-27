@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Button, Select, Tooltip, Dropdown, Modal, List, message,
-  Divider, Input, Form, Slider,
+  Divider, Input, Form, Slider, Checkbox,
 } from 'antd';
 import {
   FileAddOutlined, FolderOpenOutlined, SaveOutlined,
@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
+import { Visibility } from '../../types/uml';
 import {
   saveDiagram, openDiagram, listDiagrams,
   saveProject, openProject, listProjects,
@@ -81,46 +82,150 @@ const Toolbar: React.FC = () => {
   const [globalOptimizeVisible, setGlobalOptimizeVisible] = useState(false);
   const [globalInstructions, setGlobalInstructions] = useState('');
   const [globalOptimizing, setGlobalOptimizing] = useState(false);
+  const [globalStreamMode, setGlobalStreamMode] = useState(false);
 
-  // ── Global optimize handler ─────────────────────────
+  // ── Global optimize handler (complete mode) ─────────
   const handleGlobalOptimize = async () => {
-    setGlobalOptimizing(true);
     const proj = useDiagramStore.getState().project;
-    const classD = proj.diagrams.find(d => d.diagram_type === 'class');
+    const classD = proj.diagrams.find(d => (d.diagram_type || 'class') === 'class');
     const seqD = proj.diagrams.find(d => d.diagram_type === 'sequence');
     const compD = proj.diagrams.find(d => d.diagram_type === 'component');
-    try {
-      const result = await apiOptimizeProject({
-        class_diagram: classD as any,
-        sequence_diagram: seqD as any,
-        component_diagram: compD as any,
-        instructions: globalInstructions,
-      });
-      message.success('全局优化完成');
+
+    if (globalStreamMode) {
+      // ── Streaming mode ──────────────────────────────
+      setGlobalOptimizing(true);
       setGlobalOptimizeVisible(false);
-      // Apply optimized diagrams back to project
-      const optimized = result.optimized as any;
-      const store = useDiagramStore.getState();
-      const diagrams = [...store.project.diagrams];
-      if (optimized?.class) {
-        const idx = diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
-        if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.class as any };
+      message.loading({ content: '流式优化中，实时生成设计...', key: 'globalOpt', duration: 0 });
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        const token = (import.meta as any).env?.VITE_API_TOKEN;
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const resp = await fetch('/api/llm/optimize-project-stream', {
+          method: 'POST', headers,
+          body: JSON.stringify({ class_diagram: classD || {}, sequence_diagram: seqD || {}, component_diagram: compD || {}, instructions: globalInstructions }),
+        });
+        await handleStreamResponse(resp, proj);
+        message.success({ content: '流式优化完成', key: 'globalOpt' });
+      } catch (e) {
+        message.error({ content: '流式优化失败: ' + String(e), key: 'globalOpt' });
       }
-      if (optimized?.sequence) {
-        const idx = diagrams.findIndex(d => d.diagram_type === 'sequence');
-        if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.sequence as any };
+      setGlobalOptimizing(false);
+    } else {
+      // ── Complete mode (reliable) ─────────────────────
+      setGlobalOptimizing(true);
+      setGlobalOptimizeVisible(false);
+      message.loading({ content: '全局优化中...', key: 'globalOpt', duration: 0 });
+      try {
+        const result = await apiOptimizeProject({
+          class_diagram: classD as any, sequence_diagram: seqD as any,
+          component_diagram: compD as any, instructions: globalInstructions,
+        });
+        const optimized = result.optimized as any;
+        const store = useDiagramStore.getState();
+        const diagrams = [...store.project.diagrams];
+        if (optimized?.class) {
+          const idx = diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
+          if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.class as any };
+        }
+        if (optimized?.sequence) {
+          const idx = diagrams.findIndex(d => d.diagram_type === 'sequence');
+          if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.sequence as any };
+        }
+        if (optimized?.component) {
+          const idx = diagrams.findIndex(d => d.diagram_type === 'component');
+          if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.component as any };
+        }
+        store.setProject({ ...store.project, diagrams });
+        message.success({ content: '全局优化完成，请查看各图', key: 'globalOpt' });
+      } catch (e) {
+        message.error({ content: '全局优化失败: ' + String(e), key: 'globalOpt' });
       }
-      if (optimized?.component) {
-        const idx = diagrams.findIndex(d => d.diagram_type === 'component');
-        if (idx >= 0) diagrams[idx] = { ...diagrams[idx], ...optimized.component as any };
-      }
-      store.setProject({ ...store.project, diagrams });
-      message.success('全局优化结果已应用，请查看各图');
-    } catch (e) {
-      message.error('全局优化失败: ' + String(e));
+      setGlobalOptimizing(false);
     }
-    setGlobalOptimizing(false);
   };
+
+  // ── Streaming handler ───────────────────────────────
+  const handleStreamResponse = async (resp: Response, proj: { diagrams: Array<{ diagram_type?: string }> }) => {
+      const reader = resp.body?.getReader();
+      if (!reader) throw new Error('No stream');
+      const decoder = new TextDecoder();
+
+      const idMap = new Map<string, string>(); // LLM id → actual id
+      let currentType = '';
+      const addMap = (llmId: string, actualId: string) => { idMap.set(llmId, actualId); };
+      const getMapped = (llmId: string) => idMap.get(llmId) || llmId;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        const lines = text.split('\n').filter(l => l.startsWith('data: '));
+        for (const line of lines) {
+          const data = line.slice(6);
+          if (data === 'DONE') break;
+          const parts = data.split(',');
+          const [entityType, entityId] = parts[0].split(':');
+
+          if (entityType === 'class' && parts.length >= 5) {
+            // Ensure we're on the class diagram before adding
+            if (currentType !== 'class') {
+              const clsIdx = proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
+              if (clsIdx >= 0) { useDiagramStore.getState().setActiveDiagram(clsIdx); currentType = 'class'; }
+            }
+            const s0 = useDiagramStore.getState();
+            const [_, name, x, y, stereotype] = parts;
+            s0.addClass({ x: parseFloat(x) || 150, y: parseFloat(y) || 100 });
+            const sNew = useDiagramStore.getState();
+            const newCls = sNew.diagram.classes[sNew.diagram.classes.length - 1];
+            if (newCls) { sNew.updateClass(newCls.id, { name: name || 'NewClass', stereotype: (stereotype || 'class') as any }); addMap(entityId, newCls.id); }
+          } else if (entityType === 'relation' && parts.length >= 4) {
+            if (currentType !== 'class') { useDiagramStore.getState().setActiveDiagram(proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class')); currentType = 'class'; }
+            const [_, src, tgt, type] = parts;
+            const sRel = useDiagramStore.getState();
+            sRel.addRelation(getMapped(src), getMapped(tgt));
+            const sR2 = useDiagramStore.getState();
+            const rels = sR2.diagram.relations;
+            if (rels.length > 0) sR2.updateRelation(rels[rels.length - 1].id, { type: (type || 'association') as any });
+          } else if (entityType === 'lifeline' && parts.length >= 3) {
+            if (currentType !== 'sequence') { useDiagramStore.getState().setActiveDiagram(proj.diagrams.findIndex(d => d.diagram_type === 'sequence')); currentType = 'sequence'; }
+            const sL = useDiagramStore.getState();
+            const [_, name, x] = parts;
+            sL.addLifeline(parseFloat(x) || 200);
+            const sL2 = useDiagramStore.getState();
+            const lls = sL2.diagram.lifelines || [];
+            if (lls.length > 0) { sL2.updateLifeline(lls[lls.length - 1].id, { name: name || 'Participant' }); addMap(entityId, lls[lls.length - 1].id); }
+          } else if (entityType === 'message' && parts.length >= 6) {
+            const sM = useDiagramStore.getState();
+            const [_, from, to, label, type, order] = parts;
+            sM.addMessage(getMapped(from), getMapped(to));
+          } else if (entityType === 'attr' && parts.length >= 4) {
+            const [_, name, type, visibility] = parts;
+            const sA = useDiagramStore.getState();
+            const actualId = getMapped(entityId);
+            const cls = sA.diagram.classes.find(c => c.id === actualId);
+            if (cls) sA.updateClass(actualId, {
+              attributes: [...(cls.attributes || []), { name: name || 'attr', type: type || 'string', visibility: (visibility === '-' ? Visibility.PRIVATE : visibility === '#' ? Visibility.PROTECTED : Visibility.PUBLIC), is_static: false }]
+            });
+          } else if (entityType === 'method' && parts.length >= 4) {
+            const [_, name, return_type, params] = parts;
+            const sM = useDiagramStore.getState();
+            const actualId = getMapped(entityId);
+            const cls = sM.diagram.classes.find(c => c.id === actualId);
+            if (cls) sM.updateClass(actualId, {
+              methods: [...(cls.methods || []), { name: name || 'method', return_type: return_type || 'void', params: params || '', visibility: Visibility.PUBLIC, is_static: false, is_abstract: false }]
+            });
+          } else if (entityType === 'component' && parts.length >= 4) {
+            if (currentType !== 'component') { useDiagramStore.getState().setActiveDiagram(proj.diagrams.findIndex(d => d.diagram_type === 'component')); currentType = 'component'; }
+            const sC = useDiagramStore.getState();
+            const [_, name, x, y] = parts;
+            sC.addComponent({ x: parseFloat(x) || 150, y: parseFloat(y) || 100 });
+            const sC2 = useDiagramStore.getState();
+            const comps = sC2.diagram.components || [];
+            if (comps.length > 0) { sC2.updateComponent(comps[comps.length - 1].id, { name: name || 'Component' }); addMap(entityId, comps[comps.length - 1].id); }
+          }
+        } // for line
+      } // while
+  }; // handleStreamResponse
 
   // ── Ctrl+S global save ──────────────────────────────
   useEffect(() => {
@@ -726,6 +831,13 @@ const Toolbar: React.FC = () => {
             return <>当前项目包含：{types.join('、')}</>;
           })()}
         </p>
+        <Checkbox
+          checked={globalStreamMode}
+          onChange={(e) => setGlobalStreamMode(e.target.checked)}
+          style={{ marginBottom: 8 }}
+        >
+          动态绘图（勾选后实时生成到画布，实验性功能）
+        </Checkbox>
         <Input.TextArea
           value={globalInstructions}
           onChange={(e) => setGlobalInstructions(e.target.value)}

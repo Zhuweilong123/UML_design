@@ -45,6 +45,32 @@ async def chat(
     return response.choices[0].message.content or ""
 
 
+async def chat_stream(
+    prompt: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+):
+    """Streaming chat completion. Yields content chunks as they arrive."""
+    client = get_client()
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    stream = await client.chat.completions.create(
+        model=settings.deepseek_model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
 async def chat_with_history(
     messages: list[dict],
     temperature: float = 0.7,

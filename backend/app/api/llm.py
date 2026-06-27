@@ -2,6 +2,7 @@
 
 import logging
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.models.uml import (
@@ -12,6 +13,7 @@ from app.models.uml import (
 from app.services.llm_service import chat
 from app.services.code_generator import (
     SUPPORTED_LANGUAGES, generate_code, optimize_uml, optimize_project,
+    optimize_project_stream,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,3 +90,18 @@ async def optimize_project_endpoint(req: GlobalOptimizeRequest):
     except Exception as e:
         logger.exception(f"Global optimization failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/optimize-project-stream")
+async def optimize_project_stream_endpoint(req: GlobalOptimizeRequest):
+    """Streaming global optimization — yields entities one by one as SSE."""
+
+    async def event_stream():
+        async for line in optimize_project_stream(
+            req.class_diagram, req.sequence_diagram,
+            req.component_diagram, req.instructions,
+        ):
+            yield f"data: {line}\n\n"
+        yield "data: DONE\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

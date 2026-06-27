@@ -3,7 +3,7 @@
 import json
 import logging
 from app.models.uml import UmlDiagram
-from app.services.llm_service import chat
+from app.services.llm_service import chat, chat_stream
 from app.services.tools import clean_llm_json_response
 
 SUPPORTED_LANGUAGES = [
@@ -544,6 +544,132 @@ Only output the JSON object, no other text.
             "changes_summary": "Failed to parse LLM response",
             "diff": response,
         }
+
+
+async def optimize_project_stream(
+    class_diagram: dict | None,
+    sequence_diagram: dict | None,
+    component_diagram: dict | None,
+    instructions: str = "",
+):
+    """Streaming version: yield JSON Lines as LLM generates entities one by one."""
+    import logging as _log2
+    _l = _log2.getLogger(__name__)
+    _l.info("[OptimizeStream] Starting streaming optimization")
+    _lf = None
+
+    # Load guides (same as optimize_project)
+    guide_parts = []
+    try:
+        from pathlib import Path as _PP
+        _gd = _PP(__file__).resolve().parent.parent.parent.parent / "uml_guide"
+        for _t in ["class_diagram", "sequence_diagram", "component_diagram"]:
+            _gf = _gd / f"{_t}_guide.md"
+            if _gf.exists():
+                guide_parts.append(_gf.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    global_guide = "\n\n".join(guide_parts) if guide_parts else ""
+
+    parts = []
+    if class_diagram and (class_diagram.get("classes") or class_diagram.get("relations")):
+        parts.append(f"## Class Diagram\n```json\n{json.dumps(class_diagram, indent=2)}\n```")
+    if sequence_diagram and (sequence_diagram.get("lifelines") or sequence_diagram.get("messages")):
+        parts.append(f"## Sequence Diagram\n```json\n{json.dumps(sequence_diagram, indent=2)}\n```")
+    if component_diagram and (component_diagram.get("components") or component_diagram.get("comp_relations")):
+        parts.append(f"## Component Diagram\n```json\n{json.dumps(component_diagram, indent=2)}\n```")
+
+    is_empty = len(parts) == 0
+
+    if is_empty:
+        entity_spec = """class:<class_id>,<name>,<x>,<y>,<stereotype>
+attr:<class_id>,<name>,<type>,<visibility>
+method:<class_id>,<name>,<return_type>,<params>
+relation:<rel_id>,<source_class_id>,<target_class_id>,<type>
+lifeline:<lifeline_id>,<name>,<x>
+message:<msg_id>,<from_lifeline>,<to_lifeline>,<label>,<type>,<order>
+component:<comp_id>,<name>,<x>,<y>
+comp_rel:<rel_id>,<source_comp_id>,<target_comp_id>"""
+    else:
+        entity_spec = """class:<class_id>,<name>,<x>,<y>,<stereotype>
+attr:<class_id>,<name>,<type>,<visibility>
+method:<class_id>,<name>,<return_type>,<params>
+relation:<rel_id>,<source_class_id>,<target_class_id>,<type>
+lifeline:<lifeline_id>,<name>,<x>
+message:<msg_id>,<from_lifeline>,<to_lifeline>,<label>,<type>,<order>
+component:<comp_id>,<name>,<x>,<y>
+comp_rel:<rel_id>,<source_comp_id>,<target_comp_id>"""
+
+    prompt = f"""Output ONE entity per line in the exact formats below. No explanations, no markdown, no JSON — just raw lines.
+
+## Entity Formats (one per line):
+{entity_spec}
+
+## Rules:
+1. Start with class entities, then relations, then lifelines, then messages, then components, then comp_relations
+2. Each line is a self-contained entity. Use comma as separator. IDs must be unique.
+3. After all entities, output a final line: DONE
+
+{chr(10).join(parts) if not is_empty else ''}
+
+## Requirements:
+{instructions or "Design a complete system"}
+
+Begin:
+"""
+    full_system = (global_guide + "\n\nYou are an expert UML architect. Output entities one per line in CSV format. No explanations.") if global_guide else "You are an expert UML architect. Output entities one per line in CSV format. No explanations."
+
+    # Save prompt for diagnostics
+    full_response_parts = []
+    try:
+        from pathlib import Path as _PP2
+        _ld = _PP2(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _ld.mkdir(exist_ok=True)
+        _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
+        _lf = _ld / f"llm_stream_optimize_{_ts}.md"
+        _lf.write_text(f"# Stream Optimize ({'GENERATE' if is_empty else 'OPTIMIZE'})\n\n## Entity Format\n```\n{entity_spec}\n```\n\n## User Prompt\n```\n{prompt[:3000]}\n```", encoding="utf-8")
+        _l.info(f"[OptimizeStream] Prompt saved: {_lf}")
+    except Exception:
+        _lf = None
+
+    _l.info("[OptimizeStream] Starting LLM stream")
+    buffer = ""
+    line_count = 0
+    async for chunk in chat_stream(
+        prompt=prompt,
+        system_prompt=full_system,
+        temperature=0.5,
+        max_tokens=8192,
+    ):
+        buffer += chunk
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            line = line.strip()
+            full_response_parts.append(line)
+            if line and line != "DONE":
+                line_count += 1
+                yield line
+            elif line == "DONE":
+                _l.info(f"[OptimizeStream] DONE after {line_count} lines")
+                if _lf:
+                    try:
+                        _current = _lf.read_text(encoding="utf-8")
+                        _lf.write_text(_current + f"\n\n## Response ({line_count} entities)\n```\n{chr(10).join(full_response_parts)}\n```", encoding="utf-8")
+                    except Exception:
+                        pass
+                return
+    if buffer.strip() and buffer.strip() != "DONE":
+        full_response_parts.append(buffer.strip())
+        yield buffer.strip()
+    _l.info(f"[OptimizeStream] Stream ended. Total lines: {line_count}")
+
+    # Append full response to log (stream ended without DONE)
+    if _lf:
+        try:
+            _current = _lf.read_text(encoding="utf-8")
+            _lf.write_text(_current + f"\n\n## Response ({line_count} entities, no DONE)\n```\n{chr(10).join(full_response_parts)}\n```", encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _normalize_llm_output(data: dict) -> dict:

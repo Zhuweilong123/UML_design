@@ -82,6 +82,13 @@ metadata:
 | 67 | 右侧栏关闭后无法恢复 | 关闭按钮 ❌ 后无重新打开入口 | 前端 |
 | 68 | 组件图优化弹窗提示是类图内容 | placeholder 只判断 sequence vs else | 前端 |
 | 69 | 类图标签显示 Untitled | Toolbar 标签逻辑不一致，类图用 d.name | 前端 |
+| 70 | 全局优化空项目无输出 | `optimize_project` 空图不切生成模式，无日志 | 后端 |
+| 71 | 全局优化 prompt 日志截断 | `full_system[:3000]` 和 `response[:5000]` 限制 | 后端 |
+| 72 | 流式全局优化前端无显示 | `entityType` 解析把 `class:id` 整体当类型；idMap 未映射 | 前端 |
+| 73 | 流式边找不到节点 | LLM生成ID与store自动ID不一致，relation 无法连接 | 前端 |
+| 74 | 流式元素加到错误图 | 未先切换 active diagram，class 加到 sequence 图 | 前端 |
+| 75 | 流式 attr/method 行丢失 | 前端只处理 class/relation/lifeline/component | 前端 |
+| 76 | 工具栏过长右侧隐藏 | 单行 flex 无 wrap，按钮溢出 | 前端 |
 
 ---
 
