@@ -184,6 +184,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       isModified: false,
       undoStack: [],
       redoStack: [],
+      recenterCounter: get().recenterCounter + 1,
     });
   },
 

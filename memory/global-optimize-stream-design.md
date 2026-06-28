@@ -142,6 +142,54 @@ while (read chunk) {
 | `frontend/src/components/Canvas/SeqEditor.tsx` | `centerContent()` + fragment 最小 y_start |
 | `frontend/src/types/sequence.ts` | 消息 Y 位置统一为 `150 + order * 40` |
 
+## 代码优化（5项）
+
+| 优化 | 效果 |
+|------|------|
+| 提取 `_build_global_prompt()` | `optimize_project` 和 `optimize_project_stream` 共享 prompt 构建，消除 ~80 行重复。同时修复流式 prompt `{{{{` 双花括号 bug |
+| 前端 dispatch table | `handleStreamResponse` 8 分支 if-else → `Record<type, handler>` + `lastOf<T>` 辅助函数 |
+| 移除 `_section` 死代码 | section 追踪原本未使用，优化后 `_classify` 用 `self._section` 区分 relation/comp_rel |
+| 移除 `flush()` | 所有元素已由 `feed()` 提取，`flush()` 永不执行 |
+| Buffer 保留窗口 | `trim` 从 `self._buf[self._pos:]` 改为保留 512 字符窗口，防止字符串跨 chunk 时开头 `"` 丢失 |
+
+## 关键 Bug 修复
+
+| Bug | 根因 | 修复 |
+|-----|------|------|
+| `comp_rel` 误分类为 `relation` | buffer trim 截断字符串开头 `"`，`_update_section` 向后扫描找到错误的 key，`_section` 永远停在 `"class"` | trim 保留 512 字符窗口，确保跨 chunk 字符串的起始 `"` 仍在 buffer 中 |
+| `__didFirstSync` 被 StrictMode 浪费 | 第一次 mount 的 sync 把 ref 设为 true，remount 后 graph B 的 sync 看到 ref 已为 true 跳过居中 | cleanup 中 `_didFirstSync.current = false` 重置 |
+| `_didFirstSync` 在 Nodes=0 时触发 | `switchTo` 触发编辑器挂载时 `addClass` 尚未执行，sync 时 graph 为空 | 增加 `graph.getNodes().length > 0` 条件 |
+| `setTimeout` 闭包捕获已销毁 graph | React StrictMode mount-unmount-remount，timer 触发时闭包中 graph 已 dispose | 改用 `graphRef.current` 实时获取当前 graph |
+| SSE 多行 JSON 被 chunk 截断 | HTTP chunk 边界切断 `data:` 行，`currentData` 在 for 循环内每次重置 | `textBuffer` + `currentData` 移到 while 外层持久化 |
+
+## 视图居中方案
+
+### 两次居中策略
+
+| 时机 | 触发 | 条件 |
+|------|------|------|
+| 首帧（流式中途） | sync 后 `_didFirstSync` | `graph.getNodes().length > 0` |
+| 完成（流式结束） | DONE → `triggerRecenter()` → `recenterCounter` watcher | counter > 0 |
+| 加载项目 | `setProject()` 自动递增 `recenterCounter` | — |
+
+### 侧边栏感知
+
+```
+centerContent() → 在完整容器中居中
+if (内容宽度 < 可见区宽度 - 40px):
+    translate(tx - sidebarW/2) → 左移半个边栏 → 在可见区域居中
+else:
+    不左移 → 内容已撑满，防止左边溢出
+```
+
+`可见区宽度 = graph.options.width - useUiStore.getState().rightPanelWidth`
+
+### 关键技术点
+
+- 所有 `setTimeout` 回调必须用 `graphRef.current` 而非闭包变量（React StrictMode 兼容）
+- `centerContent` 的 padding 参数不可靠，改为手动 `translate(tx - sidebarW/2)`
+- 内容宽度接近可见区时跳过左移，避免负 tx 导致右侧留白
+
 ## 配套修复（元素显示不全）
 
 | 修复 | 位置 | 说明 |
@@ -154,3 +202,16 @@ while (read chunk) {
 | 消息 Y 不一致 | sequence.ts:81 | 统一为 150+order*40 |
 | Fragment 被工具栏遮挡 | SeqEditor.tsx:521 | 最小 y_start=80 |
 | 流式日志不完整 | code_generator.py:632 | System Prompt + 完整 User Prompt |
+
+## 涉及文件
+
+| 文件 | 角色 |
+|------|------|
+| `backend/app/services/code_generator.py` | `_build_global_prompt()` 共享构建器 + `_JsonElementExtractor` brace深度提取器 + `optimize_project_stream()` |
+| `backend/app/api/llm.py` | SSE 多行格式化（`payload.split("\n")` 每行前缀 `data: `） |
+| `frontend/src/components/Toolbar/Toolbar.tsx` | `handleStreamResponse()` — 跨 chunk buffer + dispatch table 逐元素渲染 |
+| `frontend/src/stores/diagramStore.ts` | `clampCoord()` 坐标校验 + `recenterCounter` + `triggerRecenter()` + `setProject` 自动居中 |
+| `frontend/src/components/Canvas/SeqEditor.tsx` | 两次居中 + 侧边栏感知 + fragment 最小 y_start |
+| `frontend/src/components/Canvas/UMLEditor.tsx` | 同上 |
+| `frontend/src/components/Canvas/CompEditor.tsx` | 同上 |
+| `frontend/src/types/sequence.ts` | 消息 Y 统一为 150+order*40 |

@@ -324,9 +324,9 @@ const SeqEditor: React.FC = () => {
     graphRef.current = graph;
     graph.centerContent();
     console.log('[SeqEditor] Graph initialized');
-    console.log('[SeqEditor] Graph initialized');
 
     return () => {
+      _didFirstSync.current = false;  // reset for StrictMode remount
       document.removeEventListener('keydown', handleKeyDown);
       try { graph.dispose(); } catch { /* ignore */ }
       graphRef.current = null;
@@ -336,6 +336,7 @@ const SeqEditor: React.FC = () => {
   // ── Sync diagram → graph ───────────────────────────
   const prevLifelineIds = useRef<Set<string>>(new Set());
   const htmlCache = useRef<Map<string, string>>(new Map());
+  const _didFirstSync = useRef(false);
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -541,6 +542,23 @@ const SeqEditor: React.FC = () => {
       prevLifelineIds.current = currentLIds;
       isInternalUpdate.current = false;
 
+      // Center viewport as soon as the first elements appear
+      if (!_didFirstSync.current && graph.getNodes().length > 0) {
+        _didFirstSync.current = true;
+        console.log('[SeqEditor] First sync with elements, scheduling centerContent. Nodes:', graph.getNodes().length);
+        setTimeout(() => {
+          const g = graphRef.current;
+          if (!g) return;
+          g.centerContent({ padding: { top: 20, right: 20, bottom: 20, left: 20 } });
+          const sidebarW = useUiStore.getState().rightPanelWidth;
+          const bbox = g.getAllCellsBBox?.() || g.getContentBBox?.() || { x: 0, y: 0, width: 0, height: 0 };
+          const visibleW = g.options.width - sidebarW;
+          if (bbox.width < visibleW - 40) {
+            g.translate(g.translate().tx - sidebarW / 2, g.translate().ty);
+          }
+        }, 200);
+      }
+
     } catch (err) {
       console.error('[SeqEditor] Sync error:', err);
       isInternalUpdate.current = false;
@@ -566,10 +584,20 @@ const SeqEditor: React.FC = () => {
   // ── Auto-center on recenter trigger ───────────────
   const recenterCounter = useDiagramStore((s) => s.recenterCounter);
   useEffect(() => {
-    const graph = graphRef.current;
-    if (!graph || recenterCounter <= 0) return;
+    if (recenterCounter <= 0) return;
+    const g = graphRef.current;
+    if (!g) return;
+    console.log('[SeqEditor] recenterCounter watcher, counter:', recenterCounter, 'nodes:', g.getNodes().length);
     setTimeout(() => {
-      graph.centerContent({ padding: { top: 20, right: 60, bottom: 20, left: 60 } });
+      const g2 = graphRef.current;
+      if (!g2) return;
+      g2.centerContent({ padding: { top: 20, right: 20, bottom: 20, left: 20 } });
+      const sidebarW = useUiStore.getState().rightPanelWidth;
+      const bbox = g2.getAllCellsBBox?.() || g2.getContentBBox?.() || { x: 0, y: 0, width: 0, height: 0 };
+      const visibleW = g2.options.width - sidebarW;
+      if (bbox.width < visibleW - 40) {
+        g2.translate(g2.translate().tx - sidebarW / 2, g2.translate().ty);
+      }
     }, 100);
   }, [recenterCounter]);
 

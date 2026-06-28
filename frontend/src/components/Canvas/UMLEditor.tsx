@@ -383,6 +383,7 @@ const UMLEditor: React.FC = () => {
     console.log('[UML Editor] Initialized. Shape registered:', shapeRegistered);
 
     return () => {
+      _didFirstSync.current = false;
       document.removeEventListener('keydown', handleKeyDown);
       try { graph.dispose(); } catch { /* ignore */ }
       graphRef.current = null;
@@ -392,6 +393,7 @@ const UMLEditor: React.FC = () => {
   // ── Sync diagram → graph ─────────────────────────────
   const prevClassIds = useRef<Set<string>>(new Set());
   const htmlCache = useRef<Map<string, string>>(new Map());
+  const _didFirstSync = useRef(false);
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -506,6 +508,23 @@ const UMLEditor: React.FC = () => {
 
       prevClassIds.current = currentIds;
       isInternalUpdate.current = false;
+
+      if (!_didFirstSync.current && graph.getNodes().length > 0) {
+        _didFirstSync.current = true;
+        console.log('[UMLEditor] First sync with elements, scheduling centerContent. Nodes:', graph.getNodes().length);
+        setTimeout(() => {
+          const g = graphRef.current;
+          if (!g) return;
+          const bbox = g.getAllCellsBBox?.() || g.getContentBBox?.() || { x: 0, y: 0, width: 0, height: 0 };
+          const sidebarW = useUiStore.getState().rightPanelWidth;
+          g.centerContent({ padding: { top: 20, right: 20, bottom: 20, left: 20 } });
+          // Shift left to account for sidebar, but only if content fits visible area
+          const visibleW = g.options.width - sidebarW;
+          if (bbox.width < visibleW - 40) {
+            g.translate(g.translate().tx - sidebarW / 2, g.translate().ty);
+          }
+        }, 200);
+      }
     } catch (err) {
       console.error('[UML Editor] Sync error:', err);
       isInternalUpdate.current = false;
@@ -539,10 +558,17 @@ const UMLEditor: React.FC = () => {
   // ── Auto-center on recenter trigger ───────────────
   const recenterCounter = useDiagramStore((s) => s.recenterCounter);
   useEffect(() => {
-    const graph = graphRef.current;
-    if (!graph || recenterCounter <= 0) return;
+    if (recenterCounter <= 0) return;
     setTimeout(() => {
-      graph.centerContent({ padding: { top: 20, right: 60, bottom: 20, left: 60 } });
+      const g = graphRef.current;
+      if (!g) return;
+      const bbox = g.getAllCellsBBox?.() || g.getContentBBox?.() || { x: 0, y: 0, width: 0, height: 0 };
+      const sidebarW = useUiStore.getState().rightPanelWidth;
+      g.centerContent({ padding: { top: 20, right: 20, bottom: 20, left: 20 } });
+      const visibleW = g.options.width - sidebarW;
+      if (bbox.width < visibleW - 40) {
+        g.translate(g.translate().tx - sidebarW / 2, g.translate().ty);
+      }
     }, 100);
   }, [recenterCounter]);
 
