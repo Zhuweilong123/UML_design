@@ -8,20 +8,20 @@
       "diagram_type": "class",
       "classes": [
         {
-          "id": "class_1782614236187_pgtfvn",
+          "id": "class_1782615533593_kzqn3o",
           "name": "DataSendModule",
           "stereotype": "class",
           "attributes": [
             {
-              "name": "dataBuffer",
-              "type": "byte[]",
+              "name": "dataQueue",
+              "type": "Queue<DataPacket>",
               "visibility": "-",
               "default_value": null,
               "is_static": false
             },
             {
-              "name": "targetEndpoint",
-              "type": "string",
+              "name": "connectionStatus",
+              "type": "bool",
               "visibility": "-",
               "default_value": null,
               "is_static": false
@@ -30,17 +30,17 @@
           "methods": [
             {
               "name": "sendData",
-              "return_type": "void",
-              "params": "data: byte[], target: string",
+              "return_type": "bool",
+              "params": "data: DataPacket",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "validateData",
-              "return_type": "bool",
-              "params": "data: byte[]",
-              "visibility": "-",
+              "name": "connect",
+              "return_type": "void",
+              "params": "target: string",
+              "visibility": "+",
               "is_static": false,
               "is_abstract": false
             }
@@ -53,29 +53,27 @@
             "width": 200.0,
             "height": 150.0
           },
-          "note": "负责数据的发送和传输，包含数据校验逻辑",
+          "note": "负责数据的发送，维护连接和队列",
           "provided_interfaces": [
             "IDataSender"
           ],
-          "required_interfaces": [
-            "IDataReceiver"
-          ]
+          "required_interfaces": []
         },
         {
-          "id": "class_1782614237765_az2243",
+          "id": "class_1782615535177_3k4iga",
           "name": "DataProcessModule",
           "stereotype": "class",
           "attributes": [
             {
-              "name": "processConfig",
-              "type": "ProcessConfig",
+              "name": "processingRules",
+              "type": "List<Rule>",
               "visibility": "-",
               "default_value": null,
               "is_static": false
             },
             {
-              "name": "processedData",
-              "type": "byte[]",
+              "name": "buffer",
+              "type": "DataBuffer",
               "visibility": "-",
               "default_value": null,
               "is_static": false
@@ -84,53 +82,52 @@
           "methods": [
             {
               "name": "processData",
-              "return_type": "byte[]",
-              "params": "rawData: byte[]",
+              "return_type": "ProcessedData",
+              "params": "rawData: DataPacket",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "applyTransformation",
-              "return_type": "byte[]",
-              "params": "data: byte[], config: ProcessConfig",
+              "name": "applyRules",
+              "return_type": "void",
+              "params": "data: DataPacket",
               "visibility": "-",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
-            "x": 320.0,
+            "x": 300.0,
             "y": 50.0
           },
           "size": {
             "width": 200.0,
             "height": 150.0
           },
-          "note": "负责数据处理和转换，应用处理配置",
+          "note": "负责数据处理，应用规则和转换",
           "provided_interfaces": [
-            "IDataReceiver",
             "IDataProcessor"
           ],
           "required_interfaces": [
-            "IDataStore"
+            "IDataSender"
           ]
         },
         {
-          "id": "class_1782614239291_95f5vj",
+          "id": "class_1782615536688_r5tsfo",
           "name": "DataSaveModule",
           "stereotype": "class",
           "attributes": [
             {
-              "name": "storagePath",
-              "type": "string",
+              "name": "storage",
+              "type": "Database",
               "visibility": "-",
               "default_value": null,
               "is_static": false
             },
             {
-              "name": "maxStorageSize",
-              "type": "long",
+              "name": "cache",
+              "type": "Cache",
               "visibility": "-",
               "default_value": null,
               "is_static": false
@@ -140,55 +137,77 @@
             {
               "name": "saveData",
               "return_type": "bool",
-              "params": "data: byte[], path: string",
+              "params": "data: ProcessedData",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "getStorageStatus",
-              "return_type": "StorageInfo",
-              "params": "",
+              "name": "retrieveData",
+              "return_type": "ProcessedData",
+              "params": "query: Query",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
-            "x": 590.0,
+            "x": 550.0,
             "y": 50.0
           },
           "size": {
             "width": 200.0,
             "height": 150.0
           },
-          "note": "负责数据的持久化存储，管理存储状态",
+          "note": "负责数据持久化存储和检索",
           "provided_interfaces": [
-            "IDataStore"
+            "IDataStorage"
           ],
-          "required_interfaces": []
+          "required_interfaces": [
+            "IDataProcessor"
+          ]
         }
       ],
       "relations": [
         {
-          "id": "rel_1782614239773_ic5p1h",
-          "source": "class_1782614236187_pgtfvn",
-          "target": "class_1782614237765_az2243",
-          "type": "dependency",
-          "multiplicity_source": "1",
-          "multiplicity_target": "1",
-          "role_name": "sender",
-          "note": "DataSendModule 依赖 DataProcessModule 处理数据"
-        },
-        {
-          "id": "rel_1782614240284_h8o49z",
-          "source": "class_1782614237765_az2243",
-          "target": "class_1782614239291_95f5vj",
-          "type": "dependency",
+          "id": "rel_1782615537198_2ccry8",
+          "source": "class_1782615533593_kzqn3o",
+          "target": "class_1782615535177_3k4iga",
+          "type": "association",
           "multiplicity_source": "1",
           "multiplicity_target": "1",
           "role_name": "processor",
-          "note": "DataProcessModule 依赖 DataSaveModule 存储处理结果"
+          "note": "发送模块将数据传递给处理模块"
+        },
+        {
+          "id": "rel_1782615537622_re93o7",
+          "source": "class_1782615535177_3k4iga",
+          "target": "class_1782615536688_r5tsfo",
+          "type": "association",
+          "multiplicity_source": "1",
+          "multiplicity_target": "1",
+          "role_name": "storage",
+          "note": "处理模块将结果传递给存储模块"
+        },
+        {
+          "id": "rel_1782615543644_5sf7lu",
+          "source": "comp_1782615542590_t7vt1j",
+          "target": "comp_1782615543610_hguj7g",
+          "type": "dependency",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": ""
+        },
+        {
+          "id": "rel_1782615543808_gw1gc0",
+          "source": "comp_1782615543610_hguj7g",
+          "target": "comp_1782615543628_foak5d",
+          "type": "dependency",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": ""
         }
       ],
       "lifelines": [],
@@ -213,125 +232,115 @@
       "relations": [],
       "lifelines": [
         {
-          "id": "life_1782614240565_x8ap0b",
-          "name": "Client",
+          "id": "life_1782615537936_82fbvo",
+          "name": "ExternalSystem",
           "class_ref": "",
           "x": 100.0,
           "activations": []
         },
         {
-          "id": "life_1782614240788_1texzw",
+          "id": "life_1782615538190_05wmlg",
           "name": "DataSendModule",
-          "class_ref": "class_dsm",
+          "class_ref": "class_datasendmodule",
           "x": 300.0,
           "activations": []
         },
         {
-          "id": "life_1782614241017_91cwjn",
+          "id": "life_1782615538417_qqlwio",
           "name": "DataProcessModule",
-          "class_ref": "class_dpm",
+          "class_ref": "class_dataprocessmodule",
           "x": 500.0,
           "activations": []
         },
         {
-          "id": "life_1782614241241_ptdmp0",
+          "id": "life_1782615538644_3e7pyz",
           "name": "DataSaveModule",
-          "class_ref": "class_dsm2",
+          "class_ref": "class_datasavemodule",
           "x": 700.0,
           "activations": []
         }
       ],
       "messages": [
         {
-          "id": "msg_1782614241893_k0c7fk",
-          "from_lifeline": "life_1782614240565_x8ap0b",
-          "to_lifeline": "life_1782614240788_1texzw",
-          "label": "sendData(data, target)",
+          "id": "msg_1782615539127_1ak8u2",
+          "from_lifeline": "life_1782615537936_82fbvo",
+          "to_lifeline": "life_1782615538190_05wmlg",
+          "label": "sendData(data)",
           "type": "sync",
           "order": 1,
           "y": 190.0,
-          "note": "客户端发起数据发送请求，包含原始数据和目标地址"
+          "note": "外部系统发起数据发送请求"
         },
         {
-          "id": "msg_1782614242166_umeujs",
-          "from_lifeline": "life_1782614240788_1texzw",
-          "to_lifeline": "life_1782614240788_1texzw",
-          "label": "validateData(data)",
-          "type": "self",
-          "order": 2,
-          "y": 230.0,
-          "note": "DataSendModule 内部校验数据完整性"
-        },
-        {
-          "id": "msg_1782614242665_bltb5v",
-          "from_lifeline": "life_1782614240788_1texzw",
-          "to_lifeline": "life_1782614241017_91cwjn",
+          "id": "msg_1782615539583_58b4fa",
+          "from_lifeline": "life_1782615538190_05wmlg",
+          "to_lifeline": "life_1782615538417_qqlwio",
           "label": "processData(rawData)",
           "type": "sync",
-          "order": 3,
-          "y": 270.0,
-          "note": "将原始数据发送给 DataProcessModule 进行处理"
+          "order": 2,
+          "y": 250.0,
+          "note": "发送模块将原始数据传递给处理模块"
         },
         {
-          "id": "msg_1782614243065_iro1hj",
-          "from_lifeline": "life_1782614241017_91cwjn",
-          "to_lifeline": "life_1782614241017_91cwjn",
-          "label": "applyTransformation(data, config)",
+          "id": "msg_1782615539979_j16y7k",
+          "from_lifeline": "life_1782615538417_qqlwio",
+          "to_lifeline": "life_1782615538417_qqlwio",
+          "label": "applyRules(data)",
           "type": "self",
-          "order": 4,
+          "order": 3,
           "y": 310.0,
-          "note": "DataProcessModule 内部应用处理配置进行数据转换"
+          "note": "处理模块应用业务规则进行转换"
         },
         {
-          "id": "msg_1782614243518_21fj7r",
-          "from_lifeline": "life_1782614241017_91cwjn",
-          "to_lifeline": "life_1782614241241_ptdmp0",
-          "label": "saveData(processedData, path)",
+          "id": "msg_1782615540409_j4wqjf",
+          "from_lifeline": "life_1782615538417_qqlwio",
+          "to_lifeline": "life_1782615538644_3e7pyz",
+          "label": "saveData(processedData)",
           "type": "sync",
-          "order": 5,
-          "y": 350.0,
-          "note": "将处理后的数据发送给 DataSaveModule 进行持久化存储"
+          "order": 4,
+          "y": 370.0,
+          "note": "处理模块将处理后的数据传递给存储模块"
         },
         {
-          "id": "msg_1782614243969_ppn7f9",
-          "from_lifeline": "life_1782614241241_ptdmp0",
-          "to_lifeline": "life_1782614241017_91cwjn",
-          "label": "return saveResult",
+          "id": "msg_1782615540807_u1byss",
+          "from_lifeline": "life_1782615538644_3e7pyz",
+          "to_lifeline": "life_1782615538417_qqlwio",
+          "label": "return success",
+          "type": "return",
+          "order": 5,
+          "y": 430.0,
+          "note": "存储模块返回保存结果"
+        },
+        {
+          "id": "msg_1782615541202_ogjdx4",
+          "from_lifeline": "life_1782615538417_qqlwio",
+          "to_lifeline": "life_1782615538190_05wmlg",
+          "label": "return processedResult",
           "type": "return",
           "order": 6,
-          "y": 390.0,
-          "note": "DataSaveModule 返回存储结果（成功/失败）"
+          "y": 490.0,
+          "note": "处理模块返回处理结果"
         },
         {
-          "id": "msg_1782614244432_a3yqbv",
-          "from_lifeline": "life_1782614241017_91cwjn",
-          "to_lifeline": "life_1782614240788_1texzw",
-          "label": "return processedData",
+          "id": "msg_1782615541598_e0pyf5",
+          "from_lifeline": "life_1782615538190_05wmlg",
+          "to_lifeline": "life_1782615537936_82fbvo",
+          "label": "return finalResult",
           "type": "return",
           "order": 7,
-          "y": 430.0,
-          "note": "DataProcessModule 返回处理后的数据给 DataSendModule"
-        },
-        {
-          "id": "msg_1782614245304_0x7hyo",
-          "from_lifeline": "life_1782614240788_1texzw",
-          "to_lifeline": "life_1782614240565_x8ap0b",
-          "label": "return sendResult",
-          "type": "return",
-          "order": 8,
-          "y": 470.0,
-          "note": "DataSendModule 向客户端返回最终发送结果"
+          "y": 550.0,
+          "note": "发送模块返回最终结果给外部系统"
         }
       ],
       "fragments": [
         {
-          "id": "frag_1782614245374_a6mbje",
-          "type": "alt",
-          "label": "",
-          "x": 200.0,
-          "width": 600.0,
-          "y_start": 210.0,
-          "y_end": 490.0
+          "id": "frag_1782615542106_53g25e",
+          "type": "loop",
+          "label": "[retry up to 3 times]",
+          "x": 80.0,
+          "width": 840.0,
+          "y_start": 230.0,
+          "y_end": 320.0
         }
       ],
       "components": [],
@@ -356,64 +365,50 @@
       "fragments": [],
       "components": [
         {
-          "id": "comp_1782614245959_f8q2cc",
+          "id": "comp_1782615542590_t7vt1j",
           "name": "DataSendModule",
           "x": 50.0,
-          "y": 100.0,
+          "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
             "IDataSender"
           ],
-          "required_interfaces": [
-            "IDataReceiver"
-          ]
+          "required_interfaces": []
         },
         {
-          "id": "comp_1782614246181_62u223",
+          "id": "comp_1782615543610_hguj7g",
           "name": "DataProcessModule",
-          "x": 320.0,
-          "y": 100.0,
+          "x": 300.0,
+          "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "IDataReceiver",
             "IDataProcessor"
           ],
           "required_interfaces": [
-            "IDataStore"
+            "IDataSender"
           ]
         },
         {
-          "id": "comp_1782614246562_jfnti3",
+          "id": "comp_1782615543628_foak5d",
           "name": "DataSaveModule",
-          "x": 590.0,
-          "y": 100.0,
+          "x": 550.0,
+          "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "IDataStore"
+            "IDataStorage"
           ],
-          "required_interfaces": []
+          "required_interfaces": [
+            "IDataProcessor"
+          ]
         }
       ],
-      "comp_relations": [
-        {
-          "id": "crel_1782614246815_84nioa",
-          "source": "comp_1782614245959_f8q2cc",
-          "target": "comp_1782614246181_62u223",
-          "type": "dependency"
-        },
-        {
-          "id": "crel_1782614247015_58lrs9",
-          "source": "comp_1782614246181_62u223",
-          "target": "comp_1782614246562_jfnti3",
-          "type": "dependency"
-        }
-      ],
+      "comp_relations": [],
       "grid_visible": true,
       "grid_size": 20,
       "grid_color": "#e0e0e0",
@@ -424,5 +419,5 @@
       "pan_y": 0.0
     }
   ],
-  "active_diagram_index": 0
+  "active_diagram_index": 2
 }

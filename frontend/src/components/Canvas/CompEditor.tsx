@@ -264,6 +264,7 @@ const CompEditor: React.FC = () => {
     console.log('[CompEditor] Graph initialized');
 
     return () => {
+      _didFirstSync.current = false;
       document.removeEventListener('keydown', handleKeyDown);
       try { graph.dispose(); } catch { /* ignore */ }
       graphRef.current = null;
@@ -273,6 +274,7 @@ const CompEditor: React.FC = () => {
   // ── Sync diagram → graph ───────────────────────────
   const prevCompIds = useRef<Set<string>>(new Set());
   const htmlCache = useRef<Map<string, string>>(new Map());
+  const _didFirstSync = useRef(false);
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -352,6 +354,22 @@ const CompEditor: React.FC = () => {
 
       prevCompIds.current = currentIds;
       isInternalUpdate.current = false;
+
+      if (!_didFirstSync.current && graph.getNodes().length > 0) {
+        _didFirstSync.current = true;
+        console.log('[CompEditor] First sync with elements, scheduling centerContent. Nodes:', graph.getNodes().length);
+        setTimeout(() => {
+          const g = graphRef.current;
+          if (!g) return;
+          g.centerContent({ padding: { top: 20, right: 20, bottom: 20, left: 20 } });
+          const sidebarW = useUiStore.getState().rightPanelWidth;
+          const bbox = g.getAllCellsBBox?.() || g.getContentBBox?.() || { x: 0, y: 0, width: 0, height: 0 };
+          const visibleW = g.options.width - sidebarW;
+          if (bbox.width < visibleW - 40) {
+            g.translate(g.translate().tx - sidebarW / 2, g.translate().ty);
+          }
+        }, 200);
+      }
     } catch (err) {
       console.error('[CompEditor] Sync error:', err);
       isInternalUpdate.current = false;
@@ -377,10 +395,17 @@ const CompEditor: React.FC = () => {
   // ── Auto-center on recenter trigger ───────────────
   const recenterCounter = useDiagramStore((s) => s.recenterCounter);
   useEffect(() => {
-    const graph = graphRef.current;
-    if (!graph || recenterCounter <= 0) return;
+    if (recenterCounter <= 0) return;
     setTimeout(() => {
-      graph.centerContent({ padding: { top: 20, right: 60, bottom: 20, left: 60 } });
+      const g = graphRef.current;
+      if (!g) return;
+      g.centerContent({ padding: { top: 20, right: 20, bottom: 20, left: 20 } });
+      const sidebarW = useUiStore.getState().rightPanelWidth;
+      const bbox = g.getAllCellsBBox?.() || g.getContentBBox?.() || { x: 0, y: 0, width: 0, height: 0 };
+      const visibleW = g.options.width - sidebarW;
+      if (bbox.width < visibleW - 40) {
+        g.translate(g.translate().tx - sidebarW / 2, g.translate().ty);
+      }
     }, 100);
   }, [recenterCounter]);
 

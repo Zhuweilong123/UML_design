@@ -150,23 +150,115 @@ const Toolbar: React.FC = () => {
       if (!reader) throw new Error('No stream');
       const decoder = new TextDecoder();
 
-      const idMap = new Map<string, string>(); // LLM id → store id
+      const idMap = new Map<string, string>();
       const getMapped = (llmId: string) => idMap.get(llmId) || llmId;
       let currentType = '';
 
       const switchTo = (type: string) => {
         if (currentType === type) return;
-        let idx = -1;
-        if (type === 'class') idx = proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
-        else if (type === 'sequence') idx = proj.diagrams.findIndex(d => d.diagram_type === 'sequence');
-        else if (type === 'component') idx = proj.diagrams.findIndex(d => d.diagram_type === 'component');
+        const idx = type === 'class' ? proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class')
+          : type === 'sequence' ? proj.diagrams.findIndex(d => d.diagram_type === 'sequence')
+          : proj.diagrams.findIndex(d => d.diagram_type === 'component');
         if (idx >= 0) { useDiagramStore.getState().setActiveDiagram(idx); currentType = type; }
       };
 
-      let receivedBytes = 0;
-      let sseMsgCount = 0;
-      let textBuffer = '';       // accumulates incomplete lines across chunks
-      let currentData = '';      // accumulates multi-line SSE message across chunks
+      /** Get the last item from an array (most recently added). */
+      function lastOf<T>(arr: T[] | undefined): T | null { return arr && arr.length > 0 ? arr[arr.length - 1] : null; }
+
+      // ── Element dispatch table ────────────────────────
+      const handlers: Record<string, (obj: any) => void> = {
+        class: (obj) => {
+          switchTo('class');
+          const s = useDiagramStore.getState();
+          const pos = obj.position || { x: 100, y: 100 };
+          s.addClass({ x: pos.x, y: pos.y });
+          const cls = lastOf(useDiagramStore.getState().diagram.classes);
+          if (cls) {
+            idMap.set(obj.id, cls.id);
+            s.updateClass(cls.id, {
+              name: obj.name || 'Class', stereotype: obj.stereotype || 'class',
+              attributes: obj.attributes || [], methods: obj.methods || [],
+              note: obj.note || '',
+              provided_interfaces: obj.provided_interfaces || [],
+              required_interfaces: obj.required_interfaces || [],
+            });
+            if (obj.size) s.updateClass(cls.id, { size: obj.size } as any);
+          }
+        },
+        relation: (obj) => {
+          switchTo('class');
+          useDiagramStore.getState().addRelation(getMapped(obj.source), getMapped(obj.target));
+          const rel = lastOf(useDiagramStore.getState().diagram.relations);
+          if (rel) {
+            useDiagramStore.getState().updateRelation(rel.id, {
+              type: obj.type || 'association',
+              multiplicity_source: obj.multiplicity_source || '',
+              multiplicity_target: obj.multiplicity_target || '',
+              role_name: obj.role_name || '', note: obj.note || '',
+            });
+          }
+        },
+        lifeline: (obj) => {
+          switchTo('sequence');
+          useDiagramStore.getState().addLifeline(obj.x ?? 200);
+          const ll = lastOf(useDiagramStore.getState().diagram.lifelines);
+          if (ll) {
+            idMap.set(obj.id, ll.id);
+            useDiagramStore.getState().updateLifeline(ll.id, {
+              name: obj.name || 'Participant', class_ref: obj.class_ref || '',
+              activations: obj.activations || [],
+            });
+          }
+        },
+        message: (obj) => {
+          switchTo('sequence');
+          useDiagramStore.getState().addMessage(getMapped(obj.from_lifeline), getMapped(obj.to_lifeline));
+          const msg = lastOf(useDiagramStore.getState().diagram.messages);
+          if (msg) {
+            useDiagramStore.getState().updateMessage(msg.id, {
+              label: obj.label || 'message()', type: obj.type || 'sync',
+              order: obj.order || msg.order, note: obj.note || '', y: obj.y,
+            });
+          }
+        },
+        fragment: (obj) => {
+          switchTo('sequence');
+          useDiagramStore.getState().addFragment(obj.y_start ?? 200);
+          const frag = lastOf(useDiagramStore.getState().diagram.fragments);
+          if (frag) {
+            useDiagramStore.getState().updateFragment(frag.id, {
+              type: obj.type || 'loop', label: obj.label || '',
+              x: obj.x ?? 80, width: obj.width ?? 280,
+              y_start: obj.y_start ?? 200, y_end: obj.y_end ?? 320,
+            } as any);
+          }
+        },
+        component: (obj) => {
+          switchTo('component');
+          useDiagramStore.getState().addComponent({ x: obj.x ?? 150, y: obj.y ?? 100 }, obj.parent_id || '');
+          const comp = lastOf(useDiagramStore.getState().diagram.components);
+          if (comp) {
+            idMap.set(obj.id, comp.id);
+            useDiagramStore.getState().updateComponent(comp.id, {
+              name: obj.name || 'Component', width: obj.width ?? 200, height: obj.height ?? 160,
+              provided_interfaces: obj.provided_interfaces || [],
+              required_interfaces: obj.required_interfaces || [],
+            });
+          }
+        },
+        comp_rel: (obj) => {
+          switchTo('component');
+          useDiagramStore.getState().addCompRelation(getMapped(obj.source), getMapped(obj.target));
+          const crel = lastOf(useDiagramStore.getState().diagram.comp_relations);
+          if (crel) {
+            useDiagramStore.getState().updateCompRelation(crel.id, { type: obj.type || 'dependency' });
+          }
+        },
+      };
+
+      // ── SSE read loop ────────────────────────────────
+      let receivedBytes = 0, sseMsgCount = 0;
+      let textBuffer = '', currentData = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -174,17 +266,15 @@ const Toolbar: React.FC = () => {
         receivedBytes += value?.length || 0;
         textBuffer += decoder.decode(value, { stream: true });
 
-        // Process complete lines only — carry partial lines to next chunk
         while (true) {
           const nlIdx = textBuffer.indexOf('\n');
-          if (nlIdx < 0) break;  // no complete line yet, wait for more data
+          if (nlIdx < 0) break;
           const rawLine = textBuffer.slice(0, nlIdx);
           textBuffer = textBuffer.slice(nlIdx + 1);
 
           if (rawLine.startsWith('data: ')) {
             currentData += rawLine.slice(6);
           } else if (rawLine === '') {
-            // Empty line = end of SSE message
             if (!currentData) continue;
             sseMsgCount++;
             console.log('[Stream] SSE msg #' + sseMsgCount + ':', currentData.slice(0, 150));
@@ -193,120 +283,16 @@ const Toolbar: React.FC = () => {
               useDiagramStore.getState().triggerRecenter();
               return;
             }
-            // Parse type:json_string
             const colonIdx = currentData.indexOf(':');
             if (colonIdx >= 0) {
               const elemType = currentData.slice(0, colonIdx);
               const jsonStr = currentData.slice(colonIdx + 1);
-              let obj: any;
-              try { obj = JSON.parse(jsonStr); } catch (e) {
+              try {
+                const obj = JSON.parse(jsonStr);
+                console.log('[Stream] Element:', elemType, obj.name || obj.label || obj.id);
+                handlers[elemType]?.(obj);
+              } catch (e) {
                 console.warn('[Stream] JSON parse failed for', elemType + ':', (e as Error).message, 'json:', jsonStr.slice(0, 100));
-                currentData = '';
-                continue;
-              }
-              console.log('[Stream] Element:', elemType, obj.name || obj.label || obj.id);
-
-              if (elemType === 'class') {
-                switchTo('class');
-                const s = useDiagramStore.getState();
-                const pos = obj.position || { x: 100, y: 100 };
-                s.addClass({ x: pos.x, y: pos.y });
-                const s2 = useDiagramStore.getState();
-                const cls = s2.diagram.classes[s2.diagram.classes.length - 1];
-                if (cls) {
-                  idMap.set(obj.id, cls.id);
-                  s2.updateClass(cls.id, {
-                    name: obj.name || 'Class',
-                    stereotype: obj.stereotype || 'class',
-                    attributes: obj.attributes || [],
-                    methods: obj.methods || [],
-                    note: obj.note || '',
-                    provided_interfaces: obj.provided_interfaces || [],
-                    required_interfaces: obj.required_interfaces || [],
-                  });
-                  if (obj.size) { s2.updateClass(cls.id, { size: obj.size } as any); }
-                }
-              } else if (elemType === 'relation') {
-                switchTo('class');
-                const sR = useDiagramStore.getState();
-                sR.addRelation(getMapped(obj.source), getMapped(obj.target));
-                const sR2 = useDiagramStore.getState();
-                const rels = sR2.diagram.relations;
-                if (rels.length > 0) {
-                  sR2.updateRelation(rels[rels.length - 1].id, {
-                    type: obj.type || 'association',
-                    multiplicity_source: obj.multiplicity_source || '',
-                    multiplicity_target: obj.multiplicity_target || '',
-                    role_name: obj.role_name || '',
-                    note: obj.note || '',
-                  });
-                }
-              } else if (elemType === 'lifeline') {
-                switchTo('sequence');
-                const sL = useDiagramStore.getState();
-                sL.addLifeline(obj.x ?? 200);
-                const sL2 = useDiagramStore.getState();
-                const lls = sL2.diagram.lifelines || [];
-                if (lls.length > 0) {
-                  idMap.set(obj.id, lls[lls.length - 1].id);
-                  sL2.updateLifeline(lls[lls.length - 1].id, {
-                    name: obj.name || 'Participant',
-                    class_ref: obj.class_ref || '',
-                    activations: obj.activations || [],
-                  });
-                }
-              } else if (elemType === 'message') {
-                switchTo('sequence');
-                const sM = useDiagramStore.getState();
-                sM.addMessage(getMapped(obj.from_lifeline), getMapped(obj.to_lifeline));
-                const sM2 = useDiagramStore.getState();
-                const msgs = sM2.diagram.messages || [];
-                if (msgs.length > 0) {
-                  sM2.updateMessage(msgs[msgs.length - 1].id, {
-                    label: obj.label || 'message()',
-                    type: obj.type || 'sync',
-                    order: obj.order || msgs.length,
-                    note: obj.note || '',
-                    y: obj.y,
-                  });
-                }
-              } else if (elemType === 'fragment') {
-                switchTo('sequence');
-                const sF = useDiagramStore.getState();
-                sF.addFragment(obj.y_start ?? 200);
-                const sF2 = useDiagramStore.getState();
-                const frags = sF2.diagram.fragments || [];
-                if (frags.length > 0) {
-                  sF2.updateFragment(frags[frags.length - 1].id, {
-                    type: obj.type || 'loop', label: obj.label || '',
-                    x: obj.x ?? 80, width: obj.width ?? 280,
-                    y_start: obj.y_start ?? 200, y_end: obj.y_end ?? 320,
-                  } as any);
-                }
-              } else if (elemType === 'component') {
-                switchTo('component');
-                const sC = useDiagramStore.getState();
-                sC.addComponent({ x: obj.x ?? 150, y: obj.y ?? 100 }, obj.parent_id || '');
-                const sC2 = useDiagramStore.getState();
-                const comps = sC2.diagram.components || [];
-                if (comps.length > 0) {
-                  idMap.set(obj.id, comps[comps.length - 1].id);
-                  sC2.updateComponent(comps[comps.length - 1].id, {
-                    name: obj.name || 'Component',
-                    width: obj.width ?? 200, height: obj.height ?? 160,
-                    provided_interfaces: obj.provided_interfaces || [],
-                    required_interfaces: obj.required_interfaces || [],
-                  });
-                }
-              } else if (elemType === 'comp_rel') {
-                switchTo('component');
-                const sCR = useDiagramStore.getState();
-                sCR.addCompRelation(getMapped(obj.source), getMapped(obj.target));
-                const sCR2 = useDiagramStore.getState();
-                const crels = sCR2.diagram.comp_relations || [];
-                if (crels.length > 0) {
-                  sCR2.updateCompRelation(crels[crels.length - 1].id, { type: obj.type || 'dependency' });
-                }
               }
             }
             currentData = '';
