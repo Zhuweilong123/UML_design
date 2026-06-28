@@ -2,7 +2,7 @@
 
 基于 LLM 的可视化 UML 建模与代码自动化工具。支持类图、时序图、组件图，从设计到代码生成、测试构建、代码优化的全流程闭环。
 
-<video src="UML Designer - 智能 UML 设计工具-演示.mp4" controls width="100%"></video>
+[📺 观看演示视频](https://github.com/Zhuweilong123/UML_design/blob/dev/UML%20Designer%20-%20%E6%99%BA%E8%83%BD%20UML%20%E8%AE%BE%E8%AE%A1%E5%B7%A5%E5%85%B7-%E6%BC%94%E7%A4%BA.mp4)
 
 ## 功能特性
 
