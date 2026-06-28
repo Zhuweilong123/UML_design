@@ -78,7 +78,7 @@ export function createDefaultMessage(from: string, to: string, order: number, y?
     label: 'message()',
     type: 'sync',
     order,
-    y: y || (order * 40 + 100),  // default: LIFELINE_Y(60) + 40 + order*40
+    y: y || (150 + order * 40),  // LIFELINE_Y(120) + 30 + order*40
     note: '',
   };
 }

@@ -97,11 +97,16 @@ async def optimize_project_stream_endpoint(req: GlobalOptimizeRequest):
     """Streaming global optimization — yields entities one by one as SSE."""
 
     async def event_stream():
-        async for line in optimize_project_stream(
+        async for payload in optimize_project_stream(
             req.class_diagram, req.sequence_diagram,
             req.component_diagram, req.instructions,
         ):
-            yield f"data: {line}\n\n"
-        yield "data: DONE\n\n"
+            if payload == "DONE":
+                yield "data: DONE\n\n"
+            else:
+                # Multi-line SSE: each line of the payload prefixed with "data: "
+                for pline in payload.split("\n"):
+                    yield f"data: {pline}\n"
+                yield "\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

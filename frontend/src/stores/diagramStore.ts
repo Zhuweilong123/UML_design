@@ -8,6 +8,12 @@ import { createDefaultLifeline, createDefaultMessage, createDefaultFragment } fr
 import type { CompNode, CompRelation } from '../types/component';
 import { createDefaultComponent, createDefaultCompRelation } from '../types/component';
 
+/** Clamp coordinate to valid canvas range. Falls back to a deterministic default if invalid. */
+function clampCoord(val: number | undefined, def: number, min = 50, max = 3000): number {
+  if (typeof val !== 'number' || isNaN(val) || val < min || val > max) return def;
+  return val;
+}
+
 // Undo/Redo snapshot (per-diagram)
 interface Snapshot {
   diagram: UmlDiagram;
@@ -130,6 +136,9 @@ interface DiagramState {
 
   // ── View ──────────────────────────────────────
 
+  recenterCounter: number;
+  triggerRecenter: () => void;
+
   setZoom: (zoom: number) => void;
   setPan: (x: number, y: number) => void;
 
@@ -163,6 +172,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   lastOperationTime: 0,
   maxHistorySteps: 50,
   mergeWindowMs: 500,
+  recenterCounter: 0,
 
   // ── Project actions ───────────────────────────────────
 
@@ -280,7 +290,12 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
 
   addClass: (position) => {
     const state = get();
-    const newClass = createDefaultClass(position);
+    const clsCount = state.diagram.classes.length;
+    const validPos = {
+      x: clampCoord(position?.x, 150 + (clsCount % 5) * 200),
+      y: clampCoord(position?.y, 100 + Math.floor(clsCount / 5) * 200),
+    };
+    const newClass = createDefaultClass(validPos);
     get().pushSnapshot('add_class');
     const project = _updateActiveDiagram(state.project, (d) => ({
       ...d,
@@ -398,7 +413,10 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   selectMessage: (id) => set({ selectedMessageId: id, selectedLifelineId: null }),
 
   addLifeline: (x) => {
-    const lifeline = createDefaultLifeline(x);
+    const state = get();
+    const llCount = (state.diagram.lifelines || []).length;
+    const validX = clampCoord(x, 200 + llCount * 200);
+    const lifeline = createDefaultLifeline(validX);
     get().pushSnapshot('add_lifeline');
     const project = _updateActiveDiagram(get().project, (d) => ({
       ...d,
@@ -432,6 +450,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   moveLifeline: (id, x) => {
+    get().pushSnapshot('move_lifeline');
     const project = _updateActiveDiagram(get().project, (d) => ({
       ...d,
       lifelines: (d.lifelines || []).map((l) => (l.id === id ? { ...l, x } : l)),
@@ -515,7 +534,8 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   updateFragment: (id, updates) => {
-    const project = _updateActiveDiagram(get().project, (d) => ({
+    const state = get();
+    const project = _updateActiveDiagram(state.project, (d) => ({
       ...d,
       fragments: (d.fragments || []).map((f) =>
         f.id === id ? { ...f, ...updates } : f
@@ -524,13 +544,27 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     set({ project, diagram: _activeDiagram(project), isModified: true });
   },
 
+  pushSnapshot: (op) => {
+    const state = get();
+    const snapshot = {
+      diagram: JSON.parse(JSON.stringify(state.diagram)),
+      timestamp: Date.now(),
+    };
+    const newUndo = [...state.undoStack, snapshot].slice(-state.maxHistorySteps);
+    set({ undoStack: newUndo, redoStack: [] });
+  },
+
   // ── Component diagram operations ───────────────────────
 
   selectComponent: (id) => set({ selectedComponentId: id, selectedCompRelationId: null }),
   selectCompRelation: (id) => set({ selectedCompRelationId: id, selectedComponentId: null }),
 
   addComponent: (position, parentId = '') => {
-    const c = createDefaultComponent(position?.x, position?.y, parentId);
+    const state = get();
+    const compCount = (state.diagram.components || []).length;
+    const validX = clampCoord(position?.x, 150 + (compCount % 5) * 200);
+    const validY = clampCoord(position?.y, 100 + Math.floor(compCount / 5) * 200);
+    const c = createDefaultComponent(validX, validY, parentId);
     get().pushSnapshot('add_component');
     const project = _updateActiveDiagram(get().project, (d) => ({
       ...d,
@@ -557,6 +591,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   moveComponent: (id, x, y) => {
+    get().pushSnapshot('move_component');
     const project = _updateActiveDiagram(get().project, (d) => ({
       ...d,
       components: (d.components || []).map((c) =>
@@ -645,6 +680,10 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
 
   // ── View ──────────────────────────────────────────────
 
+  triggerRecenter: () => {
+    set((s) => ({ recenterCounter: s.recenterCounter + 1 }));
+  },
+
   setZoom: (zoom) => {
     const project = _updateActiveDiagram(get().project, (d) => ({
       ...d,
@@ -659,16 +698,6 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   // ── Undo/Redo ─────────────────────────────────────────
-
-  pushSnapshot: (_operation) => {
-    const state = get();
-    const snapshot: Snapshot = {
-      diagram: JSON.parse(JSON.stringify(state.diagram)),
-      timestamp: Date.now(),
-    };
-    const newUndo = [...state.undoStack, snapshot].slice(-state.maxHistorySteps);
-    set({ undoStack: newUndo, redoStack: [] });
-  },
 
   undo: () => {
     const state = get();
