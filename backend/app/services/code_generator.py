@@ -465,6 +465,8 @@ Only output the JSON object, no other text.
 4. Flag any inconsistencies found between diagrams
 5. If any diagram is missing, generate it based on the others
 6. Optimize each diagram while maintaining consistency across all three
+7. PRESERVE all coordinate fields (position/size/x/y/width/height) across ALL diagram types. NEVER zero them out.
+8. If the user requests repositioning, adjust coordinates thoughtfully. Otherwise, keep existing positions exactly.
 
 ## User Instructions:
 {instructions or "Overall system optimization: improve consistency, reduce duplication, ensure cross-diagram coherence"}
@@ -552,10 +554,10 @@ async def optimize_project_stream(
     component_diagram: dict | None,
     instructions: str = "",
 ):
-    """Streaming version: yield JSON Lines as LLM generates entities one by one."""
+    """Streaming version: yields raw JSON chunks as LLM generates, same prompt as complete mode."""
     import logging as _log2
     _l = _log2.getLogger(__name__)
-    _l.info("[OptimizeStream] Starting streaming optimization")
+    _l.info("[OptimizeStream] Starting streaming optimization (JSON mode)")
     _lf = None
 
     # Load guides (same as optimize_project)
@@ -571,105 +573,258 @@ async def optimize_project_stream(
         pass
     global_guide = "\n\n".join(guide_parts) if guide_parts else ""
 
+    # Collect existing diagram data (same as optimize_project)
     parts = []
     if class_diagram and (class_diagram.get("classes") or class_diagram.get("relations")):
-        parts.append(f"## Class Diagram\n```json\n{json.dumps(class_diagram, indent=2)}\n```")
+        parts.append(f"""## Class Diagram:
+```json
+{json.dumps(class_diagram, indent=2, ensure_ascii=False)}
+```""")
     if sequence_diagram and (sequence_diagram.get("lifelines") or sequence_diagram.get("messages")):
-        parts.append(f"## Sequence Diagram\n```json\n{json.dumps(sequence_diagram, indent=2)}\n```")
+        parts.append(f"""## Sequence Diagram:
+```json
+{json.dumps(sequence_diagram, indent=2, ensure_ascii=False)}
+```""")
     if component_diagram and (component_diagram.get("components") or component_diagram.get("comp_relations")):
-        parts.append(f"## Component Diagram\n```json\n{json.dumps(component_diagram, indent=2)}\n```")
+        parts.append(f"""## Component Diagram:
+```json
+{json.dumps(component_diagram, indent=2, ensure_ascii=False)}
+```""")
 
     is_empty = len(parts) == 0
 
+    # Build the SAME prompt as complete mode (JSON format)
     if is_empty:
-        entity_spec = """class:<class_id>,<name>,<x>,<y>,<stereotype>
-attr:<class_id>,<name>,<type>,<visibility>
-method:<class_id>,<name>,<return_type>,<params>
-relation:<rel_id>,<source_class_id>,<target_class_id>,<type>
-lifeline:<lifeline_id>,<name>,<x>
-message:<msg_id>,<from_lifeline>,<to_lifeline>,<label>,<type>,<order>
-component:<comp_id>,<name>,<x>,<y>
-comp_rel:<rel_id>,<source_comp_id>,<target_comp_id>"""
-    else:
-        entity_spec = """class:<class_id>,<name>,<x>,<y>,<stereotype>
-attr:<class_id>,<name>,<type>,<visibility>
-method:<class_id>,<name>,<return_type>,<params>
-relation:<rel_id>,<source_class_id>,<target_class_id>,<type>
-lifeline:<lifeline_id>,<name>,<x>
-message:<msg_id>,<from_lifeline>,<to_lifeline>,<label>,<type>,<order>
-component:<comp_id>,<name>,<x>,<y>
-comp_rel:<rel_id>,<source_comp_id>,<target_comp_id>"""
+        prompt = f"""Generate a complete UML system design from the following requirements.
+Include ALL three diagram types: class diagram, sequence diagram, and component diagram.
 
-    prompt = f"""Output ONE entity per line in the exact formats below. No explanations, no markdown, no JSON — just raw lines.
+## Design Requirements:
+{instructions or "Design a well-structured software system with clear class hierarchy, interaction flows, and component architecture."}
 
-## Entity Formats (one per line):
-{entity_spec}
-
-## Rules:
-1. Start with class entities, then relations, then lifelines, then messages, then components, then comp_relations
-2. Each line is a self-contained entity. Use comma as separator. IDs must be unique.
-3. After all entities, output a final line: DONE
-
-{chr(10).join(parts) if not is_empty else ''}
-
-## Requirements:
-{instructions or "Design a complete system"}
-
-Begin:
+## Output Format — return a JSON object with ALL three diagrams:
+```json
+{{{{
+  "optimized": {{{{
+    "class": {{{{
+      "name": "Design",
+      "classes": [{{{{"id": "...", "name": "...", "stereotype": "class", "attributes": [...], "methods": [...], "position": {{"x": 100, "y": 100}}, "size": {{"width": 200, "height": 150}}, "note": "", "provided_interfaces": [], "required_interfaces": []}}}}],
+      "relations": [{{{{"id": "...", "source": "...", "target": "...", "type": "association", "multiplicity_source": "", "multiplicity_target": "", "role_name": "", "note": ""}}}}]
+    }}}},
+    "sequence": {{{{
+      "lifelines": [{{{{"id": "...", "name": "...", "x": 100, "class_ref": "", "activations": []}}}}],
+      "messages": [{{{{"id": "...", "from_lifeline": "...", "to_lifeline": "...", "label": "method()", "type": "sync", "order": 1, "note": ""}}}}],
+      "fragments": []
+    }}}},
+    "component": {{{{
+      "components": [{{{{"id": "...", "name": "...", "x": 100, "y": 100, "width": 200, "height": 160, "parent_id": "", "provided_interfaces": [], "required_interfaces": []}}}}],
+      "comp_relations": [{{{{"id": "...", "source": "...", "target": "...", "type": "dependency"}}}}]
+    }}}}
+  }}}},
+  "consistency_report": [],
+  "changes_summary": "Created new design from requirements",
+  "diff": "All diagrams generated from scratch"
+}}}}
+```
+Only output the JSON object, no other text.
 """
-    full_system = (global_guide + "\n\nYou are an expert UML architect. Output entities one per line in CSV format. No explanations.") if global_guide else "You are an expert UML architect. Output entities one per line in CSV format. No explanations."
+    else:
+        prompt = f"""Cross-validate and optimize the following UML diagrams as a complete system design.
 
-    # Save prompt for diagnostics
-    full_response_parts = []
+{chr(10).join(parts)}
+
+## Cross-Validation Rules:
+1. Sequence diagram lifelines MUST reference classes that exist in the class diagram
+2. Sequence diagram method calls MUST match method signatures in the class diagram
+3. Component diagram interfaces MUST be consistent with class diagram provided/required interfaces
+4. Flag any inconsistencies found between diagrams
+5. If any diagram is missing, generate it based on the others
+6. Optimize each diagram while maintaining consistency across all three
+7. PRESERVE all coordinate fields (position/size/x/y/width/height) across ALL diagram types. NEVER zero them out.
+8. If the user requests repositioning, adjust coordinates thoughtfully. Otherwise, keep existing positions exactly.
+
+## User Instructions:
+{instructions or "Overall system optimization: improve consistency, reduce duplication, ensure cross-diagram coherence"}
+
+## Output Format:
+```json
+{{{{
+  "optimized": {{{{
+    "class": {{{{ ... }}}},
+    "sequence": {{{{ ... }}}},
+    "component": {{{{ ... }}}}
+  }}}},
+  "consistency_report": [
+    {{{{"severity": "error|warning", "msg": "..."}}}}
+  ],
+  "changes_summary": "summary",
+  "diff": "what changed"
+}}}}
+```
+Only output the JSON object, no other text.
+"""
+    full_system = (global_guide + "\n\nYou are an expert software architect specializing in multi-view UML system design. Cross-validate diagrams for consistency.") if global_guide else "You are an expert software architect specializing in multi-view UML system design. Cross-validate diagrams for consistency."
+
+    # Save prompt for diagnostics (same format as complete mode)
     try:
         from pathlib import Path as _PP2
         _ld = _PP2(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
         _ld.mkdir(exist_ok=True)
         _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
         _lf = _ld / f"llm_stream_optimize_{_ts}.md"
-        _lf.write_text(f"# Stream Optimize ({'GENERATE' if is_empty else 'OPTIMIZE'})\n\n## Entity Format\n```\n{entity_spec}\n```\n\n## User Prompt\n```\n{prompt[:3000]}\n```", encoding="utf-8")
+        _lf.write_text(
+            f"# Stream Optimize ({'GENERATE' if is_empty else 'OPTIMIZE'})\n\n"
+            f"## System Prompt\n```\n{full_system}\n```\n\n"
+            f"## User Prompt\n```\n{prompt}\n```",
+            encoding="utf-8"
+        )
         _l.info(f"[OptimizeStream] Prompt saved: {_lf}")
     except Exception:
         _lf = None
 
-    _l.info("[OptimizeStream] Starting LLM stream")
-    buffer = ""
-    line_count = 0
+    _l.info("[OptimizeStream] Starting LLM stream (JSON mode)")
+    full_response = ""
+
+    # Use element extractor to yield complete JSON objects as they arrive
+    extractor = _JsonElementExtractor()
+    elem_count = 0
     async for chunk in chat_stream(
         prompt=prompt,
         system_prompt=full_system,
         temperature=0.5,
         max_tokens=8192,
     ):
-        buffer += chunk
-        while "\n" in buffer:
-            line, buffer = buffer.split("\n", 1)
-            line = line.strip()
-            full_response_parts.append(line)
-            if line and line != "DONE":
-                line_count += 1
-                yield line
-            elif line == "DONE":
-                _l.info(f"[OptimizeStream] DONE after {line_count} lines")
-                if _lf:
-                    try:
-                        _current = _lf.read_text(encoding="utf-8")
-                        _lf.write_text(_current + f"\n\n## Response ({line_count} entities)\n```\n{chr(10).join(full_response_parts)}\n```", encoding="utf-8")
-                    except Exception:
-                        pass
-                return
-    if buffer.strip() and buffer.strip() != "DONE":
-        full_response_parts.append(buffer.strip())
-        yield buffer.strip()
-    _l.info(f"[OptimizeStream] Stream ended. Total lines: {line_count}")
+        full_response += chunk
+        for elem_type, elem_json in extractor.feed(chunk):
+            elem_count += 1
+            _l.info(f"[OptimizeStream] Element #{elem_count}: {elem_type} ({len(elem_json)} chars)")
+            yield f"{elem_type}:{elem_json}"
 
-    # Append full response to log (stream ended without DONE)
+    # Drain any remaining elements from the buffer
+    for elem_type, elem_json in extractor.flush():
+        elem_count += 1
+        _l.info(f"[OptimizeStream] Element #{elem_count} (flush): {elem_type} ({len(elem_json)} chars)")
+        yield f"{elem_type}:{elem_json}"
+
+    yield "DONE"
+    _l.info(f"[OptimizeStream] Stream ended. Total: {elem_count} elements, {len(full_response)} chars")
+
+    # Append full response to log
     if _lf:
         try:
             _current = _lf.read_text(encoding="utf-8")
-            _lf.write_text(_current + f"\n\n## Response ({line_count} entities, no DONE)\n```\n{chr(10).join(full_response_parts)}\n```", encoding="utf-8")
+            _lf.write_text(_current + f"\n\n## Response\n```\n{full_response}\n```", encoding="utf-8")
         except Exception:
             pass
+
+
+class _JsonElementExtractor:
+    """Extracts complete JSON objects from a streaming JSON text.
+
+    Tracks brace depth to detect when a complete element (at depth 4 inside arrays)
+    finishes. Each extracted object is classified by its keys and yielded as
+    (type, json_string) so the frontend can render it immediately.
+    """
+
+    def __init__(self):
+        self._buf = ""
+        self._pos = 0
+        self._depth = 0       # brace depth ({ only)
+        self._in_str = False
+        self._esc = False
+        self._elem_start = -1  # buffer position where current depth-4 element starts
+        self._section = None   # 'class', 'sequence', or 'component'
+
+    def feed(self, chunk: str) -> list[tuple[str, str]]:
+        """Feed a new text chunk. Returns list of (type, json_string) elements found."""
+        self._buf += chunk
+        elements: list[tuple[str, str]] = []
+
+        while self._pos < len(self._buf):
+            c = self._buf[self._pos]
+
+            if self._esc:
+                self._esc = False
+            elif c == '\\' and self._in_str:
+                self._esc = True
+            elif c == '"':
+                self._in_str = not self._in_str
+                # Track section context: detect keys "class", "sequence", "component" at depth 2
+                if not self._in_str and self._depth == 2:
+                    j = self._pos - 1
+                    while j >= 0 and self._buf[j] != '"':
+                        j -= 1
+                    if j >= 0:
+                        key = self._buf[j + 1:self._pos]
+                        if key in ('class', 'sequence', 'component'):
+                            self._section = key
+            elif not self._in_str:
+                if c == '{':
+                    if self._depth == 3:
+                        self._elem_start = self._pos
+                    self._depth += 1
+                elif c == '}':
+                    self._depth -= 1
+                    if self._depth == 3 and self._elem_start >= 0:
+                        txt = self._buf[self._elem_start:self._pos + 1]
+                        try:
+                            obj = json.loads(txt)
+                            tp = self._classify(obj)
+                            if tp:
+                                elements.append((tp, txt))
+                        except json.JSONDecodeError:
+                            pass  # incomplete object, will retry with more data
+                        self._elem_start = -1
+
+            self._pos += 1
+
+        # Trim processed buffer to bound memory
+        if self._elem_start >= 0:
+            self._buf = self._buf[self._elem_start:]
+            self._pos -= self._elem_start
+            self._elem_start = 0
+        else:
+            self._buf = self._buf[self._pos:]
+            self._pos = 0
+
+        return elements
+
+    def flush(self) -> list[tuple[str, str]]:
+        """Called after the stream ends to process any remaining buffer content."""
+        elements: list[tuple[str, str]] = []
+        # Try to parse whatever remains as a complete element
+        if self._elem_start >= 0:
+            txt = self._buf[self._elem_start:self._pos] if self._pos < len(self._buf) else self._buf[self._elem_start:]
+            txt = txt.strip()
+            if txt:
+                try:
+                    obj = json.loads(txt)
+                    tp = self._classify(obj)
+                    if tp:
+                        elements.append((tp, txt))
+                except json.JSONDecodeError:
+                    pass
+        return elements
+
+    @staticmethod
+    def _classify(obj: dict) -> str | None:
+        """Determine element type from JSON object keys."""
+        if 'stereotype' in obj:
+            return 'class'
+        if 'from_lifeline' in obj:
+            return 'message'
+        if 'y_start' in obj or 'y_end' in obj:
+            return 'fragment'
+        if 'class_ref' in obj:
+            return 'lifeline'
+        if 'source' in obj and 'target' in obj:
+            # Could be class relation or component relation.
+            # Heuristic: class relations have multiplicity fields; comp_rels don't.
+            if 'multiplicity_source' in obj or 'role_name' in obj:
+                return 'relation'
+            return 'comp_rel'
+        if 'parent_id' in obj or 'provided_interfaces' in obj:
+            return 'component'
+        return None
 
 
 def _normalize_llm_output(data: dict) -> dict:
@@ -741,7 +896,20 @@ def _normalize_llm_output(data: dict) -> dict:
             return [walk(item, parent_key) for item in obj]
         return obj
 
-    return walk(data)
+    result = walk(data)
+
+    # Detect if LLM zeroed out all positions (common failure mode)
+    classes = result.get("classes", [])
+    if classes and all(
+        isinstance(c, dict) and c.get("position", {}).get("x", 0) == 0
+        and c.get("position", {}).get("y", 0) == 0
+        for c in classes
+    ):
+        logging.getLogger(__name__).warning(
+            "[Optimize] LLM returned all-zero positions for classes — positions may have been lost"
+        )
+
+    return result
 
 
 async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
@@ -756,7 +924,9 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 3. messages: "id", "from_lifeline", "to_lifeline", "label", "type" (sync|async|return|simple|self), "order", "note"
 4. Every lifeline and message MUST have a unique "id"
 5. Message "order" should be sequential from top to bottom
-6. PRESERVE all "note" and "class_ref" fields"""
+6. PRESERVE all "note" and "class_ref" fields
+7. PRESERVE the "x" field on every lifeline — NEVER reset lifeline positions
+8. PRESERVE the "y" and "order" fields on every message — NEVER reset message Y positions"""
         default_inst = "优化时序图交互流程：检查遗漏/多余消息、调用顺序合理性、消息命名准确性"
         system = "You are an expert software architect specializing in UML sequence diagrams and interaction design."
     elif dt == "component":
@@ -766,7 +936,8 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 2. components: "id", "name", "x", "y", "width", "height", "parent_id", "provided_interfaces", "required_interfaces"
 4. comp_relations: "id", "source", "target", "type" (dependency|delegation)
 5. Every component and relation MUST have a unique "id"
-6. PRESERVE all "provided_interfaces" and "required_interfaces" lists"""
+6. PRESERVE all "provided_interfaces" and "required_interfaces" lists
+7. PRESERVE the "x", "y", "width", "height" fields on every component — NEVER reset their positions or sizes"""
         default_inst = "优化组件架构：检查组件职责划分、依赖关系合理性、接口设计完整性"
         system = "You are an expert software architect specializing in UML component diagrams and system architecture."
     else:
@@ -778,7 +949,8 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 4. relation type values MUST be "inheritance", "composition", "aggregation", "association", "realization", or "dependency"
 5. Every class and relation MUST have a unique "id"
 6. PRESERVE all "note" fields on classes and relations
-7. PRESERVE "role_name", "multiplicity_source", "multiplicity_target" on relations"""
+7. PRESERVE "role_name", "multiplicity_source", "multiplicity_target" on relations
+8. PRESERVE all "position" and "size" fields on every class — NEVER reset them"""
         default_inst = "General design optimization: improve cohesion, reduce coupling, apply design patterns where appropriate."
         system = "You are an expert software architect specializing in UML design and design patterns. Always use +, -, # for visibility values."
 

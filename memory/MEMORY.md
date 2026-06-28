@@ -1,2 +1,3 @@
 - [UML Designer 问题与解决方案](bugfix-uml-designer.md) — 记录了43个关键问题的根因和修复方案
 - [UML Designer 功能迭代记录](feature-log.md) — 记录了13项功能的实现过程和涉及文件
+- [全局优化动态绘图架构设计](global-optimize-stream-design.md) — CSV→JSON→Brace深度提取三阶段演进、关键设计决策与实现细节

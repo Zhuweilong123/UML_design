@@ -249,7 +249,7 @@
           "label": "submitData(rawData)",
           "type": "sync",
           "order": 1,
-          "y": 190.0,
+          "y": 170.0,
           "note": "外部系统提交原始数据到 DataSendModule"
         },
         {
@@ -259,7 +259,7 @@
           "label": "prepareData(rawData)",
           "type": "self",
           "order": 2,
-          "y": 230.0,
+          "y": 210.0,
           "note": "DataSendModule 内部封装和准备数据"
         },
         {
@@ -279,7 +279,7 @@
           "label": "validateData(data)",
           "type": "self",
           "order": 4,
-          "y": 310.0,
+          "y": 330.0,
           "note": "DataProcessModule 验证数据的完整性和正确性"
         },
         {
@@ -289,7 +289,7 @@
           "label": "transformData(data)",
           "type": "self",
           "order": 5,
-          "y": 350.0,
+          "y": 290.0,
           "note": "根据规则转换数据格式"
         },
         {
@@ -319,7 +319,7 @@
           "label": "return saveResult",
           "type": "return",
           "order": 8,
-          "y": 470.0,
+          "y": 490.0,
           "note": "返回存储结果（成功/失败）"
         },
         {
@@ -329,7 +329,7 @@
           "label": "return processResult",
           "type": "return",
           "order": 9,
-          "y": 510.0,
+          "y": 530.0,
           "note": "返回处理结果给 DataSendModule"
         },
         {
@@ -345,13 +345,13 @@
       ],
       "fragments": [
         {
-          "id": "frag_opt_validation",
-          "type": "opt",
-          "label": "[validation failed]",
-          "x": 250.0,
-          "width": 550.0,
-          "y_start": 310.0,
-          "y_end": 360.0
+          "id": "frag_1782573953973_m0wc62",
+          "type": "loop",
+          "label": "",
+          "x": 260.0,
+          "width": 640.0,
+          "y_start": 200.0,
+          "y_end": 400.0000000000009
         }
       ],
       "components": [],
@@ -443,5 +443,5 @@
       "pan_y": 0.0
     }
   ],
-  "active_diagram_index": 0
+  "active_diagram_index": 1
 }

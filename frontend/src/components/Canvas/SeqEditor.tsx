@@ -59,15 +59,15 @@ function ensureShapesRegistered() {
     ports: {},
   });
 
-  // Fragment: draggable, resizable overlay with label tab
+  // Fragment: overlay with label tab
   Graph.registerNode('seq-fragment', {
     inherit: 'rect',
     markup: [
       { tagName: 'rect', selector: 'body' },
       {
-        tagName: 'foreignObject', selector: 'fo',
+        tagName: 'foreignObject', selector: 'label',
         children: [{
-          tagName: 'div', ns: 'http://www.w3.org/1999/xhtml', selector: 'label',
+          tagName: 'div', ns: 'http://www.w3.org/1999/xhtml', selector: 'labelText',
           style: {
             position: 'absolute', top: 0, left: 0,
             fontSize: '11px', fontWeight: 600, fontFamily: 'Consolas, monospace',
@@ -81,11 +81,10 @@ function ensureShapesRegistered() {
     attrs: {
       body: {
         stroke: '#555', strokeWidth: 1.5, fill: 'rgba(230,247,255,0.15)',
-        rx: 2, ry: 2,
-        magnet: true,
+        rx: 2, ry: 2, magnet: true,
       },
-      fo: { refWidth: '100%', refHeight: '20' },
-      label: { html: '' },
+      label: { refWidth: '100%', refHeight: '22', refX: 0, refY: 0 },
+      labelText: { html: '' },
     },
     ports: {},
   });
@@ -134,6 +133,11 @@ const SeqEditor: React.FC = () => {
 
   const { setRightPanelTab } = useUiStore();
 
+  // ── Fragment context menu ───────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ visible: boolean; x: number; y: number; nodeId: string }>({
+    visible: false, x: 0, y: 0, nodeId: '',
+  });
+
   // ── Init graph ──────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || graphRef.current) return;
@@ -159,7 +163,7 @@ const SeqEditor: React.FC = () => {
     graph.use(new Snapline({ enabled: true, sharp: true }));
 
     // Click-to-click message creation (lifelines only)
-    graph.on('node:click', ({ node }) => {
+    graph.on('node:click', ({ node, e }) => {
       if (node.shape === 'seq-fragment') {
         (graph as any).__selectedFragment = node.id;
         return;
@@ -183,25 +187,47 @@ const SeqEditor: React.FC = () => {
       (graph as any).__selectedFragment = null;
     });
 
-    // Track fragment moves and resizes (only when user-initiated)
+    // Right-click on fragment → context menu
+    graph.on('node:contextmenu', ({ node, e }: any) => {
+      if (node.shape === 'seq-fragment') {
+        const evt = e.evt || e;
+        evt?.preventDefault?.();
+        setCtxMenu({
+          visible: true,
+          x: evt?.clientX || evt?.pageX || e.clientX || e.pageX || 0,
+          y: evt?.clientY || evt?.pageY || e.clientY || e.pageY || 0,
+          nodeId: node.id,
+        });
+      }
+    });
+
+    // Fragment move: keep height constant by shifting both y_start and y_end
+    let fragMoved = false;
     graph.on('node:moved', ({ node }) => {
       if (node.shape === 'seq-fragment' && !isInternalUpdate.current) {
-        const store = useDiagramStore.getState();
-        store.updateFragment(node.id, {
+        fragMoved = true;
+        const h = node.size().height;
+        useDiagramStore.getState().updateFragment(node.id, {
           x: node.position().x,
           y_start: node.position().y,
+          y_end: node.position().y + h,
         } as any);
       }
     });
     graph.on('node:resized', ({ node }) => {
       if (node.shape === 'seq-fragment' && !isInternalUpdate.current) {
-        const store = useDiagramStore.getState();
-        store.updateFragment(node.id, {
-          x: node.position().x,
-          width: node.size().width,
-          y_start: node.position().y,
-          y_end: node.position().y + node.size().height,
+        fragMoved = true;
+        useDiagramStore.getState().updateFragment(node.id, {
+          x: node.position().x, width: node.size().width,
+          y_start: node.position().y, y_end: node.position().y + node.size().height,
         } as any);
+      }
+    });
+    // One snapshot per drag/resize operation (on mouseup)
+    graph.on('cell:mouseup', ({ cell }: any) => {
+      if (fragMoved && cell?.shape === 'seq-fragment') {
+        useDiagramStore.getState().pushSnapshot('move_fragment');
+        fragMoved = false;
       }
     });
 
@@ -296,6 +322,7 @@ const SeqEditor: React.FC = () => {
     document.addEventListener('keydown', handleKeyDown);
 
     graphRef.current = graph;
+    graph.centerContent();
     console.log('[SeqEditor] Graph initialized');
     console.log('[SeqEditor] Graph initialized');
 
@@ -331,14 +358,8 @@ const SeqEditor: React.FC = () => {
       // Calculate needed height from message count
       const neededHeight = Math.max(LIFELINE_HEIGHT, 120 + messages.length * 40);
 
-      // Add/update lifelines — auto-fix negative x (corrupted by clientToLocal)
+      // Add/update lifelines (coordinate validation handled by store)
       lifelines.forEach((ll) => {
-        if (ll.x < 50) {
-          const fixedX = 150 + Math.random() * 300;
-          console.log('[SeqEditor] Fixing lifeline x:', ll.name, ll.x, '→', fixedX);
-          useDiagramStore.getState().updateLifeline(ll.id, { x: fixedX });
-          ll = { ...ll, x: fixedX };
-        }
         const htmlContent = buildLifelineHTML(ll, ll.id === selectedLifelineId);
         const cached = htmlCache.current.get(ll.id);
         try {
@@ -387,11 +408,16 @@ const SeqEditor: React.FC = () => {
         const msgY = msg.y || MSG_Y_BASE + msg.order * 40;  // persisted Y takes priority
 
         // Connect from source lifeline edge → target lifeline edge
-        // If source is left of target: source right edge → target left edge  (arrow →)
-        // If source is right of target: source left edge → target right edge (arrow ←)
-        const srcIsLeft = srcLL.x <= tgtLL.x;
-        const fromX = srcIsLeft ? srcLL.x + LIFELINE_WIDTH : srcLL.x;
-        const toX   = srcIsLeft ? tgtLL.x : tgtLL.x + LIFELINE_WIDTH;
+        // Self-messages stay on right side; normal messages connect edges
+        let fromX: number, toX: number;
+        if (isSelf) {
+          fromX = srcLL.x + LIFELINE_WIDTH;
+          toX   = srcLL.x + LIFELINE_WIDTH;
+        } else {
+          const srcIsLeft = srcLL.x <= tgtLL.x;
+          fromX = srcIsLeft ? srcLL.x + LIFELINE_WIDTH : srcLL.x;
+          toX   = srcIsLeft ? tgtLL.x : tgtLL.x + LIFELINE_WIDTH;
+        }
 
         let strokeColor = '#1890ff';
         let strokeDash = '';
@@ -409,8 +435,18 @@ const SeqEditor: React.FC = () => {
         try {
           const existing = graph.getCellById(msg.id);
           if (existing && existing.isEdge()) {
-            // Update existing edge when type/label changes in property panel
+            // Update existing edge: positions, vertices, style, label
             const edge = existing as Edge;
+            edge.setSource({ x: fromX, y: msgY });
+            edge.setTarget({ x: toX, y: isSelf ? msgY + 24 : msgY });
+            if (isSelf) {
+              edge.setVertices([
+                { x: srcLL.x + LIFELINE_WIDTH + 40, y: msgY },
+                { x: srcLL.x + LIFELINE_WIDTH + 40, y: msgY + 24 },
+              ]);
+            } else {
+              edge.setVertices([]);
+            }
             edge.setLabels(msg.label ? [{
               attrs: {
                 text: { text: msg.label, fontSize: 10, fill: strokeColor },
@@ -470,26 +506,31 @@ const SeqEditor: React.FC = () => {
           try { graph.removeCell(n.id); } catch { /* ignore */ }
         }
       });
-      // Add/update fragments: only position on creation, not on every sync
+      // Add/update fragments
       const existingFragIds = new Set(
         graph.getNodes().filter((n) => n.shape === 'seq-fragment').map((n) => n.id)
       );
       fragments.forEach((f) => {
         const label = `${f.type}${f.label ? ` ${f.label}` : ''}`;
+        const w = f.width || 280;
+        const yStart = Math.max(f.y_start || 80, 80);  // ensure fragment clears toolbar
+        const h = Math.max(60, (f.y_end || (yStart + 120)) - yStart);
         try {
-          if (!existingFragIds.has(f.id)) {
-            // New fragment — add at stored position
+          const existing = graph.getCellById(f.id);
+          if (existing && existing.isNode()) {
+            (existing as Node).setPosition(f.x || 80, yStart);
+            existing.setSize({ width: w, height: h });
+          } else {
             graph.addNode({
               id: f.id, shape: 'seq-fragment',
-              x: f.x || 80, y: f.y_start || 0,
-              width: f.width || 280,
-              height: Math.max(60, (f.y_end || 100) - (f.y_start || 0)),
+              x: f.x || 80, y: yStart,
+              width: w, height: h,
             });
           }
           // Always update label + style
           const fn = graph.getCellById(f.id) as Node;
           if (fn) {
-            fn.setAttrByPath('label/html', `<span>${label}</span>`);
+            fn.setAttrByPath('labelText/html', `<span>${label}</span>`);
             fn.setAttrByPath('body/stroke', f.type === 'alt' ? '#722ed1' :
               f.type === 'loop' ? '#1890ff' : '#555');
             fn.setAttrByPath('body/strokeDasharray', f.type === 'opt' ? '4,2' : '');
@@ -521,6 +562,16 @@ const SeqEditor: React.FC = () => {
       }
     } catch (e) { /* ignore */ }
   }, [diagram.grid_visible, diagram.grid_size, diagram.grid_color, diagram.grid_thickness]);
+
+  // ── Auto-center on recenter trigger ───────────────
+  const recenterCounter = useDiagramStore((s) => s.recenterCounter);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || recenterCounter <= 0) return;
+    setTimeout(() => {
+      graph.centerContent({ padding: { top: 20, right: 60, bottom: 20, left: 60 } });
+    }, 100);
+  }, [recenterCounter]);
 
   // ── Floating toolbar ────────────────────────────────
   const [showToolbar, setShowToolbar] = useState(true);
@@ -584,6 +635,42 @@ const SeqEditor: React.FC = () => {
       )}
 
       <div ref={containerRef} className="seq-canvas-container" />
+
+      {/* Fragment right-click menu */}
+      {ctxMenu.visible && (
+        <div
+          style={{
+            position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 1000,
+            background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)', padding: 4, minWidth: 100,
+          }}
+          onClick={() => setCtxMenu({ ...ctxMenu, visible: false })}
+        >
+          <div
+            style={{ padding: '4px 12px', cursor: 'pointer', fontSize: 12, borderRadius: 4 }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            onClick={() => {
+              const fn = graphRef.current?.getCellById(ctxMenu.nodeId);
+              if (fn) (fn as Node).toBack();
+            }}
+          >置于底层</div>
+          <div
+            style={{ padding: '4px 12px', cursor: 'pointer', fontSize: 12, borderRadius: 4 }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            onClick={() => {
+              const fn = graphRef.current?.getCellById(ctxMenu.nodeId);
+              if (fn) (fn as Node).toFront();
+            }}
+          >置于上层</div>
+        </div>
+      )}
+      {/* Click anywhere to close menu */}
+      {ctxMenu.visible && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 999 }}
+          onClick={() => setCtxMenu({ ...ctxMenu, visible: false })} />
+      )}
     </div>
   );
 };

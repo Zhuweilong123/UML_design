@@ -19,7 +19,6 @@ import {
 } from '@ant-design/icons';
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
-import { Visibility } from '../../types/uml';
 import {
   saveDiagram, openDiagram, listDiagrams,
   saveProject, openProject, listProjects,
@@ -105,6 +104,7 @@ const Toolbar: React.FC = () => {
           body: JSON.stringify({ class_diagram: classD || {}, sequence_diagram: seqD || {}, component_diagram: compD || {}, instructions: globalInstructions }),
         });
         await handleStreamResponse(resp, proj);
+        useDiagramStore.getState().triggerRecenter();
         message.success({ content: '流式优化完成', key: 'globalOpt' });
       } catch (e) {
         message.error({ content: '流式优化失败: ' + String(e), key: 'globalOpt' });
@@ -144,87 +144,175 @@ const Toolbar: React.FC = () => {
     }
   };
 
-  // ── Streaming handler ───────────────────────────────
+  // ── Streaming handler (incremental element-by-element) ─
   const handleStreamResponse = async (resp: Response, proj: { diagrams: Array<{ diagram_type?: string }> }) => {
       const reader = resp.body?.getReader();
       if (!reader) throw new Error('No stream');
       const decoder = new TextDecoder();
 
-      const idMap = new Map<string, string>(); // LLM id → actual id
-      let currentType = '';
-      const addMap = (llmId: string, actualId: string) => { idMap.set(llmId, actualId); };
+      const idMap = new Map<string, string>(); // LLM id → store id
       const getMapped = (llmId: string) => idMap.get(llmId) || llmId;
+      let currentType = '';
+
+      const switchTo = (type: string) => {
+        if (currentType === type) return;
+        let idx = -1;
+        if (type === 'class') idx = proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
+        else if (type === 'sequence') idx = proj.diagrams.findIndex(d => d.diagram_type === 'sequence');
+        else if (type === 'component') idx = proj.diagrams.findIndex(d => d.diagram_type === 'component');
+        if (idx >= 0) { useDiagramStore.getState().setActiveDiagram(idx); currentType = type; }
+      };
+
+      let receivedBytes = 0;
+      let sseMsgCount = 0;
+      let textBuffer = '';       // accumulates incomplete lines across chunks
+      let currentData = '';      // accumulates multi-line SSE message across chunks
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split('\n').filter(l => l.startsWith('data: '));
-        for (const line of lines) {
-          const data = line.slice(6);
-          if (data === 'DONE') break;
-          const parts = data.split(',');
-          const [entityType, entityId] = parts[0].split(':');
+        if (done) { console.log('[Stream] Reader done, total bytes:', receivedBytes, 'msgs:', sseMsgCount); break; }
+        receivedBytes += value?.length || 0;
+        textBuffer += decoder.decode(value, { stream: true });
 
-          if (entityType === 'class' && parts.length >= 5) {
-            // Ensure we're on the class diagram before adding
-            if (currentType !== 'class') {
-              const clsIdx = proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class');
-              if (clsIdx >= 0) { useDiagramStore.getState().setActiveDiagram(clsIdx); currentType = 'class'; }
+        // Process complete lines only — carry partial lines to next chunk
+        while (true) {
+          const nlIdx = textBuffer.indexOf('\n');
+          if (nlIdx < 0) break;  // no complete line yet, wait for more data
+          const rawLine = textBuffer.slice(0, nlIdx);
+          textBuffer = textBuffer.slice(nlIdx + 1);
+
+          if (rawLine.startsWith('data: ')) {
+            currentData += rawLine.slice(6);
+          } else if (rawLine === '') {
+            // Empty line = end of SSE message
+            if (!currentData) continue;
+            sseMsgCount++;
+            console.log('[Stream] SSE msg #' + sseMsgCount + ':', currentData.slice(0, 150));
+            if (currentData === 'DONE') {
+              console.log('[Stream] DONE received, total msgs:', sseMsgCount);
+              useDiagramStore.getState().triggerRecenter();
+              return;
             }
-            const s0 = useDiagramStore.getState();
-            const [_, name, x, y, stereotype] = parts;
-            s0.addClass({ x: parseFloat(x) || 150, y: parseFloat(y) || 100 });
-            const sNew = useDiagramStore.getState();
-            const newCls = sNew.diagram.classes[sNew.diagram.classes.length - 1];
-            if (newCls) { sNew.updateClass(newCls.id, { name: name || 'NewClass', stereotype: (stereotype || 'class') as any }); addMap(entityId, newCls.id); }
-          } else if (entityType === 'relation' && parts.length >= 4) {
-            if (currentType !== 'class') { useDiagramStore.getState().setActiveDiagram(proj.diagrams.findIndex(d => (d.diagram_type || 'class') === 'class')); currentType = 'class'; }
-            const [_, src, tgt, type] = parts;
-            const sRel = useDiagramStore.getState();
-            sRel.addRelation(getMapped(src), getMapped(tgt));
-            const sR2 = useDiagramStore.getState();
-            const rels = sR2.diagram.relations;
-            if (rels.length > 0) sR2.updateRelation(rels[rels.length - 1].id, { type: (type || 'association') as any });
-          } else if (entityType === 'lifeline' && parts.length >= 3) {
-            if (currentType !== 'sequence') { useDiagramStore.getState().setActiveDiagram(proj.diagrams.findIndex(d => d.diagram_type === 'sequence')); currentType = 'sequence'; }
-            const sL = useDiagramStore.getState();
-            const [_, name, x] = parts;
-            sL.addLifeline(parseFloat(x) || 200);
-            const sL2 = useDiagramStore.getState();
-            const lls = sL2.diagram.lifelines || [];
-            if (lls.length > 0) { sL2.updateLifeline(lls[lls.length - 1].id, { name: name || 'Participant' }); addMap(entityId, lls[lls.length - 1].id); }
-          } else if (entityType === 'message' && parts.length >= 6) {
-            const sM = useDiagramStore.getState();
-            const [_, from, to, label, type, order] = parts;
-            sM.addMessage(getMapped(from), getMapped(to));
-          } else if (entityType === 'attr' && parts.length >= 4) {
-            const [_, name, type, visibility] = parts;
-            const sA = useDiagramStore.getState();
-            const actualId = getMapped(entityId);
-            const cls = sA.diagram.classes.find(c => c.id === actualId);
-            if (cls) sA.updateClass(actualId, {
-              attributes: [...(cls.attributes || []), { name: name || 'attr', type: type || 'string', visibility: (visibility === '-' ? Visibility.PRIVATE : visibility === '#' ? Visibility.PROTECTED : Visibility.PUBLIC), is_static: false }]
-            });
-          } else if (entityType === 'method' && parts.length >= 4) {
-            const [_, name, return_type, params] = parts;
-            const sM = useDiagramStore.getState();
-            const actualId = getMapped(entityId);
-            const cls = sM.diagram.classes.find(c => c.id === actualId);
-            if (cls) sM.updateClass(actualId, {
-              methods: [...(cls.methods || []), { name: name || 'method', return_type: return_type || 'void', params: params || '', visibility: Visibility.PUBLIC, is_static: false, is_abstract: false }]
-            });
-          } else if (entityType === 'component' && parts.length >= 4) {
-            if (currentType !== 'component') { useDiagramStore.getState().setActiveDiagram(proj.diagrams.findIndex(d => d.diagram_type === 'component')); currentType = 'component'; }
-            const sC = useDiagramStore.getState();
-            const [_, name, x, y] = parts;
-            sC.addComponent({ x: parseFloat(x) || 150, y: parseFloat(y) || 100 });
-            const sC2 = useDiagramStore.getState();
-            const comps = sC2.diagram.components || [];
-            if (comps.length > 0) { sC2.updateComponent(comps[comps.length - 1].id, { name: name || 'Component' }); addMap(entityId, comps[comps.length - 1].id); }
+            // Parse type:json_string
+            const colonIdx = currentData.indexOf(':');
+            if (colonIdx >= 0) {
+              const elemType = currentData.slice(0, colonIdx);
+              const jsonStr = currentData.slice(colonIdx + 1);
+              let obj: any;
+              try { obj = JSON.parse(jsonStr); } catch (e) {
+                console.warn('[Stream] JSON parse failed for', elemType + ':', (e as Error).message, 'json:', jsonStr.slice(0, 100));
+                currentData = '';
+                continue;
+              }
+              console.log('[Stream] Element:', elemType, obj.name || obj.label || obj.id);
+
+              if (elemType === 'class') {
+                switchTo('class');
+                const s = useDiagramStore.getState();
+                const pos = obj.position || { x: 100, y: 100 };
+                s.addClass({ x: pos.x, y: pos.y });
+                const s2 = useDiagramStore.getState();
+                const cls = s2.diagram.classes[s2.diagram.classes.length - 1];
+                if (cls) {
+                  idMap.set(obj.id, cls.id);
+                  s2.updateClass(cls.id, {
+                    name: obj.name || 'Class',
+                    stereotype: obj.stereotype || 'class',
+                    attributes: obj.attributes || [],
+                    methods: obj.methods || [],
+                    note: obj.note || '',
+                    provided_interfaces: obj.provided_interfaces || [],
+                    required_interfaces: obj.required_interfaces || [],
+                  });
+                  if (obj.size) { s2.updateClass(cls.id, { size: obj.size } as any); }
+                }
+              } else if (elemType === 'relation') {
+                switchTo('class');
+                const sR = useDiagramStore.getState();
+                sR.addRelation(getMapped(obj.source), getMapped(obj.target));
+                const sR2 = useDiagramStore.getState();
+                const rels = sR2.diagram.relations;
+                if (rels.length > 0) {
+                  sR2.updateRelation(rels[rels.length - 1].id, {
+                    type: obj.type || 'association',
+                    multiplicity_source: obj.multiplicity_source || '',
+                    multiplicity_target: obj.multiplicity_target || '',
+                    role_name: obj.role_name || '',
+                    note: obj.note || '',
+                  });
+                }
+              } else if (elemType === 'lifeline') {
+                switchTo('sequence');
+                const sL = useDiagramStore.getState();
+                sL.addLifeline(obj.x ?? 200);
+                const sL2 = useDiagramStore.getState();
+                const lls = sL2.diagram.lifelines || [];
+                if (lls.length > 0) {
+                  idMap.set(obj.id, lls[lls.length - 1].id);
+                  sL2.updateLifeline(lls[lls.length - 1].id, {
+                    name: obj.name || 'Participant',
+                    class_ref: obj.class_ref || '',
+                    activations: obj.activations || [],
+                  });
+                }
+              } else if (elemType === 'message') {
+                switchTo('sequence');
+                const sM = useDiagramStore.getState();
+                sM.addMessage(getMapped(obj.from_lifeline), getMapped(obj.to_lifeline));
+                const sM2 = useDiagramStore.getState();
+                const msgs = sM2.diagram.messages || [];
+                if (msgs.length > 0) {
+                  sM2.updateMessage(msgs[msgs.length - 1].id, {
+                    label: obj.label || 'message()',
+                    type: obj.type || 'sync',
+                    order: obj.order || msgs.length,
+                    note: obj.note || '',
+                    y: obj.y,
+                  });
+                }
+              } else if (elemType === 'fragment') {
+                switchTo('sequence');
+                const sF = useDiagramStore.getState();
+                sF.addFragment(obj.y_start ?? 200);
+                const sF2 = useDiagramStore.getState();
+                const frags = sF2.diagram.fragments || [];
+                if (frags.length > 0) {
+                  sF2.updateFragment(frags[frags.length - 1].id, {
+                    type: obj.type || 'loop', label: obj.label || '',
+                    x: obj.x ?? 80, width: obj.width ?? 280,
+                    y_start: obj.y_start ?? 200, y_end: obj.y_end ?? 320,
+                  } as any);
+                }
+              } else if (elemType === 'component') {
+                switchTo('component');
+                const sC = useDiagramStore.getState();
+                sC.addComponent({ x: obj.x ?? 150, y: obj.y ?? 100 }, obj.parent_id || '');
+                const sC2 = useDiagramStore.getState();
+                const comps = sC2.diagram.components || [];
+                if (comps.length > 0) {
+                  idMap.set(obj.id, comps[comps.length - 1].id);
+                  sC2.updateComponent(comps[comps.length - 1].id, {
+                    name: obj.name || 'Component',
+                    width: obj.width ?? 200, height: obj.height ?? 160,
+                    provided_interfaces: obj.provided_interfaces || [],
+                    required_interfaces: obj.required_interfaces || [],
+                  });
+                }
+              } else if (elemType === 'comp_rel') {
+                switchTo('component');
+                const sCR = useDiagramStore.getState();
+                sCR.addCompRelation(getMapped(obj.source), getMapped(obj.target));
+                const sCR2 = useDiagramStore.getState();
+                const crels = sCR2.diagram.comp_relations || [];
+                if (crels.length > 0) {
+                  sCR2.updateCompRelation(crels[crels.length - 1].id, { type: obj.type || 'dependency' });
+                }
+              }
+            }
+            currentData = '';
           }
-        } // for line
-      } // while
+        }
+      }
   }; // handleStreamResponse
 
   // ── Ctrl+S global save ──────────────────────────────

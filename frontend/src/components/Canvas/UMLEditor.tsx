@@ -536,6 +536,16 @@ const UMLEditor: React.FC = () => {
     }
   }, [diagram.grid_visible, diagram.grid_size, diagram.grid_color, diagram.grid_thickness]);
 
+  // ── Auto-center on recenter trigger ───────────────
+  const recenterCounter = useDiagramStore((s) => s.recenterCounter);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || recenterCounter <= 0) return;
+    setTimeout(() => {
+      graph.centerContent({ padding: { top: 20, right: 60, bottom: 20, left: 60 } });
+    }, 100);
+  }, [recenterCounter]);
+
   // ── Helpers ──────────────────────────────────────────
   const handleAddClass = useCallback(() => {
     const x = 150 + Math.random() * 400;
