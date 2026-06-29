@@ -911,6 +911,16 @@ Only output the JSON object, no other text.
         temperature=0.5,
         max_tokens=8192,
     )
+
+    # Append LLM response to log
+    try:
+        _f.write_text(
+            _f.read_text(encoding="utf-8") + f"\n\n# LLM Response\n```json\n{response}\n```",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
     try:
         cleaned = clean_llm_json_response(response)
         result = json.loads(cleaned)

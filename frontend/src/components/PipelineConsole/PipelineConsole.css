@@ -107,3 +107,67 @@
   color: #1890ff;
   font-weight: 500;
 }
+
+/* ── ReAct reasoning trace ── */
+.react-trace {
+  margin-top: 6px;
+}
+
+.react-steps {
+  margin-top: 8px;
+  padding: 8px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.react-step {
+  margin-bottom: 10px;
+  padding: 4px 8px;
+  border-left: 2px solid #1890ff;
+  font-size: 12px;
+}
+
+.react-step:last-child {
+  margin-bottom: 0;
+}
+
+.react-step-header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.react-step-header code {
+  font-size: 11px;
+  background: #e6f7ff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #1890ff;
+}
+
+.react-thought {
+  color: #555;
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.react-observation {
+  margin-top: 2px;
+}
+
+.react-observation pre {
+  margin: 2px 0;
+  font-size: 11px;
+  background: #f5f5f5;
+  padding: 4px 8px;
+  border-radius: 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 100px;
+  overflow-y: auto;
+}

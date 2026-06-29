@@ -95,6 +95,7 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
     auto_confirm = msg.get("auto_confirm", False)
     source_dir = msg.get("source_dir", "")
     test_dir = msg.get("test_dir", "")
+    max_change_ratio = msg.get("max_change_ratio", 0)  # 0=disabled
     # Extract class + sequence diagrams from project for integrated generation
     project_data = msg.get("project", {})
     diagrams = project_data.get("diagrams", [])
@@ -116,7 +117,7 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
         nonlocal stop_requested
         try:
             while True:
-                raw = await asyncio.wait_for(ws.receive_text(), timeout=0.5)
+                raw = await ws.receive_text()
                 msg = json.loads(raw)
                 if msg.get("action") == "stop":
                     stop_requested = True
@@ -126,13 +127,14 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                 elif msg.get("action") == "confirm":
                     confirm_stage(
                         pipeline_id,
-                        msg.get("stage", "dev_confirm"),
+                        StageName(msg.get("stage", "dev_confirm")),
                         msg.get("accepted", False),
                         msg.get("comment", ""),
                     )
                     async for resume_event in resume_pipeline(
                         pipeline_id, diagram, language, auto_confirm=True,
                         source_dir=source_dir, test_dir=test_dir, sequence_diagram=seq_diagram, component_diagram=comp_diagram,
+                        max_change_ratio=max_change_ratio,
                     ):
                         if _is_stopped(pipeline_id):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
@@ -186,6 +188,7 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
                     async for resume_event in resume_with_instructions(
                         pipeline_id, diagram, instructions, language,
                         source_dir=source_dir, test_dir=test_dir, sequence_diagram=seq_diagram, component_diagram=comp_diagram,
+                        max_change_ratio=max_change_ratio,
                     ):
                         if _is_stopped(pipeline_id):
                             await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})
@@ -259,6 +262,7 @@ async def pipeline_websocket(ws: WebSocket, pipeline_id: str, token: str = ""):
         async for event in run_pipeline(
             pipeline_id, diagram, language, auto_confirm,
             source_dir=source_dir, test_dir=test_dir, sequence_diagram=seq_diagram, component_diagram=comp_diagram,
+            max_change_ratio=max_change_ratio,
         ):
             if stop_requested or _is_stopped(pipeline_id):
                 await ws.send_json({"event": "stopped", "pipeline_id": pipeline_id})

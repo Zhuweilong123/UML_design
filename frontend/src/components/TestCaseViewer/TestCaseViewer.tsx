@@ -6,12 +6,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Button, Tabs, Table, Select, message, Space, Tag, Modal, Input,
-  Tooltip, Badge, Divider,
+  Tooltip, Badge, Divider, Upload,
 } from 'antd';
 import {
   ReloadOutlined, CodeOutlined, PlusOutlined,
   SaveOutlined, FileTextOutlined, FileAddOutlined,
-  HistoryOutlined,
+  HistoryOutlined, FolderOpenOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { loadTestFile, saveTestFile, generateTestCode, saveTestReview, listTestFiles } from '../../services/api';
 import { useUiStore } from '../../stores/uiStore';
@@ -29,6 +29,8 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
 
   const [files, setFiles] = useState<Array<{ name: string; path: string }>>([]);
   const [currentFile, setCurrentFile] = useState('');
+  const [customDir, setCustomDir] = useState('');
+  const [testhubDir, setTesthubDir] = useState('');
   const [sheets, setSheets] = useState<Record<string, SheetData>>({});
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState('');
@@ -46,22 +48,29 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     loadFiles();
   }, []);
 
-  const loadFiles = async () => {
+  const loadFiles = async (dir?: string) => {
     try {
-      const result = await listTestFiles();
+      const result = await listTestFiles(dir);
       setFiles(result.files || []);
+      setTesthubDir(result.testhub_dir || '');
       if (result.files?.length && !currentFile) {
-        handleLoadFile(result.files[0].name);
+        handleLoadFile(result.files[0].name, dir);
+      } else if (!result.files?.length) {
+        setCurrentFile('');
+        setSheets({});
+        setSheetNames([]);
+        setActiveSheet('');
       }
     } catch {
-      message.error('加载testHub文件列表失败');
+      message.error('加载用例文件列表失败');
     }
   };
 
-  const handleLoadFile = async (filename: string) => {
+  const handleLoadFile = async (filename: string, dir?: string) => {
+    if (!filename) return;
     setLoading(true);
     try {
-      const data = await loadTestFile(filename);
+      const data = await loadTestFile(filename, dir || customDir || undefined);
       setCurrentFile(data.filename);
       setSheets(data.sheets as Record<string, SheetData>);
       setSheetNames(data.sheet_names || []);
@@ -75,6 +84,18 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       message.error('加载测试文件失败');
     }
     setLoading(false);
+  };
+
+  const handleDirChange = () => {
+    const dir = customDir.trim();
+    setCurrentFile('');
+    loadFiles(dir || undefined);
+  };
+
+  const handleResetDir = () => {
+    setCustomDir('');
+    setCurrentFile('');
+    loadFiles();
   };
 
   /** Find column index by header name (case-insensitive partial match) */
@@ -252,16 +273,34 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       {/* Header */}
       <div className="testcase-header">
         <h3>用例检视</h3>
-        <Space>
-          <Select
-            value={currentFile}
-            onChange={handleLoadFile}
-            style={{ width: 250 }}
-            options={files.map(f => ({ value: f.name, label: f.name }))}
-            placeholder="选择测试文件..."
+        <Space wrap>
+          <Input
+            prefix={<FolderOpenOutlined />}
+            value={customDir}
+            onChange={e => setCustomDir(e.target.value)}
+            onPressEnter={handleDirChange}
+            placeholder="输入用例目录路径（留空使用默认）"
+            style={{ width: 300 }}
+            allowClear
+            onClear={handleResetDir}
           />
+          <Button onClick={handleDirChange} size="small">加载</Button>
+          <Button onClick={handleResetDir} size="small" disabled={!customDir}>默认</Button>
+          <Divider type="vertical" />
+
+          {files.length > 0 ? (
+            <Select
+              value={currentFile}
+              onChange={v => handleLoadFile(v)}
+              style={{ width: 250 }}
+              options={files.map(f => ({ value: f.name, label: f.name }))}
+              placeholder="选择测试文件..."
+            />
+          ) : (
+            <span style={{ color: '#999' }}>当前无额外用例</span>
+          )}
           <Tooltip title="刷新文件列表">
-            <Button icon={<ReloadOutlined />} onClick={loadFiles} size="small" />
+            <Button icon={<ReloadOutlined />} onClick={() => loadFiles(customDir || undefined)} size="small" />
           </Tooltip>
           <Divider type="vertical" />
 
