@@ -235,12 +235,11 @@ class TestReviewRequest(BaseModel):
 
 @router.post("/save-review")
 async def save_test_review(req: TestReviewRequest):
-    """Save test case review operation log to test_review.txt."""
-    d = _get_testhub_dir()
-    review_file = os.path.join(d, "test_review.txt")
+    """Save test case review operation log to dev_review.txt (unified review file)."""
+    review_file = os.path.abspath(os.path.join(settings.uml_dir, "..", "dev_review.txt"))
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[{ts}] {req.action}"
+    entry = f"[{ts}] [用例审核] {req.action}"
     if req.filename:
         entry += f" | File: {req.filename}"
     if req.sheet:

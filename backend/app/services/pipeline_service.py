@@ -22,6 +22,62 @@ from app.core.security import safe_path, resolve_path
 logger = logging.getLogger(__name__)
 
 
+def _save_uml_review_record(diagram_name: str, action: str, comment: str = ""):
+    """Append UML optimization review record to dev_review.txt."""
+    settings = get_settings()
+    review_file = os.path.abspath(os.path.join(settings.uml_dir, "..", "dev_review.txt"))
+
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if action == "skip":
+        action_label = "跳过"
+    elif action == "accept":
+        action_label = "接受"
+    elif action == "reject":
+        action_label = "拒绝"
+    else:
+        action_label = action
+
+    entry = f"""============================================================
+[{ts}] UML评审结果: {action_label}
+优化需求: (无)
+原始版本: {diagram_name}
+优化版本: {diagram_name}
+评审意见: {comment if comment else '(无)'}
+============================================================
+"""
+
+    with open(review_file, "a", encoding="utf-8") as f:
+        f.write(entry)
+
+    logger.info(f"[Pipeline] UML review saved to dev_review.txt: {action_label}")
+
+
+def _save_case_review_file(pipeline_id: str, diagram_name: str, test_cases: str):
+    """Append case review summary to dev_review.txt when Stage 4 completes."""
+    settings = get_settings()
+    review_file = os.path.abspath(os.path.join(settings.uml_dir, "..", "dev_review.txt"))
+
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    case_count = len([l for l in test_cases.split("\n") if l.strip().startswith("- [")])
+
+    entry = f"""============================================================
+[{ts}] 用例审核确认
+Pipeline: {pipeline_id}
+项目: {diagram_name}
+用例总数: {case_count}
+============================================================
+"""
+
+    with open(review_file, "a", encoding="utf-8") as f:
+        f.write(entry)
+
+    logger.info(f"[Pipeline] Case review appended to dev_review.txt: {case_count} cases")
+    return review_file
+
+
 def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: str):
     """Save detailed pipeline run log as a markdown file in pipeline_log/ directory."""
     settings = get_settings()
@@ -119,16 +175,21 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
 
         elif s.name == StageName.TEST_GEN:
             files = result.get("test_files", [])
+            react_steps = result.get("react_steps", [])
+            react_summary = result.get("react_summary", "")
+            react_error = result.get("react_error", "")
             lines.append(f"**测试文件**: {len(files)} 个")
             for f in files:
                 lines.append(f"- `{f}`")
             lines.append("")
 
-        elif s.name == StageName.TEST_EXEC:
-            react_steps = result.get("react_steps", [])
-            test_results = result.get("test_results", "")
-            if react_steps:
-                lines.append(f"**ReAct 推理步骤**: {len(react_steps)} 步")
+            if react_error:
+                lines.append(f"⚠️ **ReAct 校验异常**: {react_error}")
+                lines.append("")
+            elif react_steps:
+                lines.append(f"**ReAct 测试校验步骤**: {len(react_steps)} 步")
+                if react_summary:
+                    lines.append(f"**校验结果**: {react_summary}")
                 lines.append("")
                 lines.append("| 轮次 | 动作 | 观察结果 |")
                 lines.append("|------|------|---------|")
@@ -136,15 +197,16 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
                     obs = str(step.get("observation", ""))[:200]
                     lines.append(f"| {step.get('round', '-')} | `{step.get('action', '-')}` | {obs} |")
                 lines.append("")
+
+        elif s.name == StageName.CODE_OPTIMIZE:
+            test_results = result.get("test_results", "")
+            lines.append(f"**总优化轮次**: {pipeline.optimization_round}/3")
             if test_results:
+                lines.append("")
                 lines.append("**测试执行结果**:")
                 lines.append("```")
                 lines.append(str(test_results)[:5000])
                 lines.append("```")
-                lines.append("")
-
-        elif s.name == StageName.CODE_OPTIMIZE:
-            lines.append(f"**总优化轮次**: {pipeline.optimization_round}/3")
             lines.append("")
 
             # Show each round's detailed results
@@ -232,9 +294,9 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
         lines.append("")
 
     # ── Final Test Pass Rate ──
-    test_exec_stage = next((s for s in pipeline.stages if s.name == StageName.TEST_EXEC), None)
-    if test_exec_stage and test_exec_stage.result:
-        test_results_text = test_exec_stage.result.get("test_results", "")
+    code_opt_stage = next((s for s in pipeline.stages if s.name == StageName.CODE_OPTIMIZE), None)
+    if code_opt_stage and code_opt_stage.result:
+        test_results_text = code_opt_stage.result.get("test_results", "")
         if test_results_text:
             # Parse pass/fail counts
             import re
@@ -382,8 +444,19 @@ async def resume_with_instructions(
 
 
 def stop_pipeline(pipeline_id: str):
-    """Signal a pipeline to stop."""
+    """Signal a pipeline to stop and reset all RUNNING stages to FAILED."""
     _stopped.add(pipeline_id)
+    pipeline = _pipelines.get(pipeline_id)
+    if pipeline:
+        for stage in pipeline.stages:
+            if stage.status == StageStatus.RUNNING:
+                stage.status = StageStatus.FAILED
+                stage.logs = (stage.logs or "") + " [已停止]"
+
+
+def _clear_stop_flag(pipeline_id: str):
+    """Remove the stop flag for a pipeline (cleanup after stop is handled)."""
+    _stopped.discard(pipeline_id)
 
 
 def _is_stopped(pipeline_id: str) -> bool:
@@ -398,7 +471,6 @@ def create_pipeline(diagram_id: str, diagram: UmlDiagram) -> PipelineState:
         PipelineStage(name=StageName.CODE_GEN, label=STAGE_LABELS["code_gen"]),
         PipelineStage(name=StageName.CASE_REVIEW, label=STAGE_LABELS["case_review"]),
         PipelineStage(name=StageName.TEST_GEN, label=STAGE_LABELS["test_gen"]),
-        PipelineStage(name=StageName.TEST_EXEC, label=STAGE_LABELS["test_exec"]),
         PipelineStage(name=StageName.CODE_OPTIMIZE, label=STAGE_LABELS["code_optimize"]),
     ]
     state = PipelineState(
@@ -483,6 +555,7 @@ async def run_pipeline(
 
     try:
         opt_result = await optimize_uml(diagram, instructions)
+        if _is_stopped(pipeline_id): return
         optimized_data = opt_result.get("optimized", diagram.model_dump())
         if isinstance(optimized_data, dict):
             optimized_diagram = UmlDiagram(**optimized_data)
@@ -493,6 +566,8 @@ async def run_pipeline(
         yield await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.FAILED, str(e))
         if not auto_confirm:
             return
+
+    if _is_stopped(pipeline_id): return
 
     # --- Stage 2: Dev Confirm ---
     if auto_confirm:
@@ -513,6 +588,7 @@ async def run_pipeline(
                                        f"Adapting {len(existing_code)} existing source files to UML...")
             try:
                 current_code = await adapt_code_to_uml(existing_code, optimized_diagram, language)
+                if _is_stopped(pipeline_id): return
                 if not current_code:
                     logger.error("[Pipeline Stage 3] adapt_code_to_uml returned empty")
                     yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
@@ -542,6 +618,7 @@ async def run_pipeline(
             else:
                 current_code = await generate_code(optimized_diagram, language)
                 pipeline.stages[2].result["prompt_type"] = "generate_code (class only)"
+            if _is_stopped(pipeline_id): return
             if not current_code:
                 logger.error("[Pipeline Stage 3] generate_code returned empty — LLM JSON parse likely failed")
                 yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
@@ -652,76 +729,54 @@ async def _run_test_and_optimize(
     source_dir: str = "",
     test_dir: str = "",
 ) -> AsyncIterator[dict]:
-    """Stage 6: fix compilation errors only. Stage 7: optimize source code using real test results."""
+    """Stage 6: run real pytest and optimize source code using test results.
+
+    Test execution is folded into the code optimisation stage — no separate
+    compile-check stage.  ReAct test validation already happened in Stage 5b.
+    """
+
+    if _is_stopped(pipeline.pipeline_id): return
 
     # ═══════════════════════════════════════════════════════════════
-    # Stage 6: Compile-Check — only fix import/syntax/NameError
+    # Stage 6: Run tests → optimize source code using real failures
     # ═══════════════════════════════════════════════════════════════
-    yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
-                               "Running pytest to check compilation...")
 
-    # Step 6a: Run pytest, fix only fatal errors (import/syntax/NameError)
-    fatal_still_remain = False
-    for fix_round in range(1, 3):
-        test_results_text = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
-        fatal_errors = _extract_fatal_errors(test_results_text)
+    # Step 1: Initial test execution
+    yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
+                               "Running pytest to establish baseline...")
 
-        if not fatal_errors:
-            logger.info(f"[Stage6] Round {fix_round}: No fatal errors, compilation OK")
-            yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
-                                       f"Round {fix_round}: compilation OK ({_count_tests(test_results_text)} tests collected)")
-            fatal_still_remain = False
-            break
-
-        logger.info(f"[Stage6] Round {fix_round}: {len(fatal_errors)} fatal errors found, asking LLM to fix")
-        yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.RUNNING,
-                                   f"Round {fix_round}: fixing {len(fatal_errors)} compilation errors...")
-
-        # Simple LLM call to fix only compilation errors
-        fixed = await _fix_compile_errors(test_files, current_code, language, fatal_errors)
-        # Check if fix actually changed anything (P1-3: detect no-op fixes)
-        if _files_equal(test_files, fixed):
-            logger.warning(f"[Stage6] Round {fix_round}: LLM fix produced no changes, aborting compile fix loop")
-            fatal_still_remain = True
-            break
-        test_files = fixed
-        pipeline.stages[5].result = {
-            "fatal_errors_found": len(fatal_errors),
-            "fix_round": fix_round,
-        }
-        # Save fixed test files to disk
-        _save_generated_files(diagram.name, language, {}, test_files, target_test_dir=test_dir)
-
-    else:
-        fatal_still_remain = True
-        logger.warning(f"[Stage6] Compilation errors persist after 2 rounds")
-
-    # Step 6b: Final verification
-    test_results_text = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
-    final_fatal = _extract_fatal_errors(test_results_text)
+    test_results_text = await _execute_tests(test_files, language, diagram.name,
+                                              source_dir=source_dir, test_dir=test_dir)
     total_tests = _count_tests(test_results_text)
+    fatal_errors = _extract_fatal_errors(test_results_text)
 
-    if fatal_still_remain and final_fatal:
-        # P1-3: Block if compilation errors remain unfixed
-        logger.error(f"[Stage6] {len(final_fatal)} fatal errors still present, aborting pipeline")
-        pipeline.stages[5].result = {
-            **(pipeline.stages[5].result or {}),
-            "test_results": test_results_text,
-            "unfixed_fatal_errors": final_fatal,
-        }
-        yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.FAILED,
-                                   f"Compilation failed: {len(final_fatal)} errors unfixed. Check test code manually.")
-        return
+    if fatal_errors:
+        logger.warning(f"[Stage 6] {len(fatal_errors)} fatal errors remain after ReAct validation")
+        import re as _re2
+        passed = len(_re2.findall(r'->\s*PASS', test_results_text, _re2.IGNORECASE))
+        failed = len(_re2.findall(r'->\s*FAIL', test_results_text, _re2.IGNORECASE))
+        if passed == 0 and failed == 0:
+            # No tests collected at all — compilation is fundamentally broken
+            logger.error(f"[Stage 6] No tests collected — fatal compilation errors block execution")
+            pipeline.stages[5].result = {
+                "test_results": test_results_text,
+                "unfixed_fatal_errors": fatal_errors[:10],
+                "test_files": list(test_files.keys()),
+            }
+            yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.FAILED,
+                                       f"Compilation still broken after validation: {len(fatal_errors)} fatal errors. "
+                                       f"Check test code manually.")
+            return
 
     pipeline.stages[5].result = {
-        **(pipeline.stages[5].result or {}),
         "test_results": test_results_text,
+        "test_files": list(test_files.keys()),
     }
-    yield await _update_stage(pipeline, StageName.TEST_EXEC, StageStatus.SUCCESS,
-                               f"Compilation OK, {total_tests} tests ready for Stage 7")
+    yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
+                               f"Baseline: {total_tests} tests ready, starting code optimization")
 
     # ═══════════════════════════════════════════════════════════════
-    # Stage 7: Code Optimize — use real test results to fix source
+    # Stage 6 (cont.): Code Optimize — use real test results to fix source
     # ═══════════════════════════════════════════════════════════════
     rounds_history = []
     round_context = ""
@@ -730,6 +785,7 @@ async def _run_test_and_optimize(
     prev_pass_rate = 0
 
     for round_num in range(1, 4):
+        if _is_stopped(pipeline.pipeline_id): return
         pipeline.optimization_round = round_num
         yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.RUNNING,
                                    f"Code optimization round {round_num}/3")
@@ -742,14 +798,16 @@ async def _run_test_and_optimize(
             current_code, test_files, test_results_text, language, round_num,
             round_context=round_context,
         )
-        if optimized_code and _validate_files_match(optimized_code, current_code, "Stage7 optimize"):
+        if _is_stopped(pipeline.pipeline_id): return
+        if optimized_code and _validate_files_match(optimized_code, current_code, "Stage6 optimize"):
             current_code = optimized_code
 
         # Save optimized source code
         _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
 
         # Re-run real pytest to verify
-        new_test_results = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
+        new_test_results = await _execute_tests(test_files, language, diagram.name,
+                                                 source_dir=source_dir, test_dir=test_dir)
 
         # Parse results
         import re as _re
@@ -766,11 +824,12 @@ async def _run_test_and_optimize(
         # Rollback on regression
         rolled_back = False
         if round_num > 1 and pass_rate < prev_pass_rate:
-            logger.warning(f"[Stage7] Round {round_num}: REGRESSION {prev_pass_rate}% → {pass_rate}%, rolling back")
+            logger.warning(f"[Stage 6] Round {round_num}: REGRESSION {prev_pass_rate}% → {pass_rate}%, rolling back")
             current_code = prev_code
             _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
             rolled_back = True
-            new_test_results = await _execute_tests(test_files, language, diagram.name, source_dir=source_dir, test_dir=test_dir)
+            new_test_results = await _execute_tests(test_files, language, diagram.name,
+                                                     source_dir=source_dir, test_dir=test_dir)
             passed = len(_re.findall(r'->\s*PASS', new_test_results, _re.IGNORECASE))
             failed = len(_re.findall(r'->\s*FAIL', new_test_results, _re.IGNORECASE))
             total = passed + failed
@@ -801,8 +860,9 @@ async def _run_test_and_optimize(
         else:
             stale_count = 0
 
-        logger.info(f"[Stage7] Round {round_num}: {passed}P/{failed}F/{total}T = {pass_rate}%{' (rolled back)' if rolled_back else ''} | Stale: {stale_count}")
-        logger.info(f"[Stage7] Context: {round_context.strip()}")
+        logger.info(f"[Stage 6] Round {round_num}: {passed}P/{failed}F/{total}T = {pass_rate}%"
+                    f"{' (rolled back)' if rolled_back else ''} | Stale: {stale_count}")
+        logger.info(f"[Stage 6] Context: {round_context.strip()}")
 
         round_record = {
             "round": round_num,
@@ -816,8 +876,7 @@ async def _run_test_and_optimize(
         }
         rounds_history.append(round_record)
 
-        pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": new_test_results}
-        pipeline.stages[6].result = {"rounds": rounds_history}
+        pipeline.stages[5].result = {**(pipeline.stages[5].result or {}), "test_results": new_test_results, "rounds": rounds_history}
 
         # Early exit: all tests pass
         if failed == 0:
@@ -829,7 +888,7 @@ async def _run_test_and_optimize(
         if stale_count >= 2:
             stale_list = ", ".join(sorted(new_failed_names))
             msg = f"以下 {len(new_failed_names)} 个用例在 {round_num} 轮优化后无改善，可能不是源码问题，请人工审查：{stale_list}"
-            logger.warning(f"[Stage7] Early exit: {msg}")
+            logger.warning(f"[Stage 6] Early exit: {msg}")
             yield await _update_stage(pipeline, StageName.CODE_OPTIMIZE, StageStatus.SUCCESS, msg)
             break
 
@@ -889,7 +948,7 @@ def _extract_fatal_errors(test_results_text: str) -> list[str]:
 
     Fatal = code cannot even run (bad imports, syntax, undefined names).
     NOT fatal = AssertionError (test logic), object-level AttributeError
-    (missing method — that's Stage 7's job to add to source code).
+    (missing method — that's Stage 6's job to add to source code).
     """
     import re
     fatal_keywords = [
@@ -908,7 +967,7 @@ def _extract_fatal_errors(test_results_text: str) -> list[str]:
             # Module-level AttributeError (e.g. "module 'X' has no attribute 'Y'")
             # → fatal because the import path is wrong.
             # Object-level AttributeError (e.g. "'Foo' object has no attribute 'bar'")
-            # → NOT fatal, let Stage 7 add the missing method to source code.
+            # → NOT fatal, let Stage 6 add the missing method to source code.
             if "has no attribute" in line and "' object has no attribute" not in line:
                 errors.append(line.strip())
             elif "does not have the attribute" in line:
@@ -924,84 +983,6 @@ def _count_tests(test_results_text: str) -> int:
     return passed + failed
 
 
-async def _fix_compile_errors(
-    test_files: dict[str, str],
-    source_code: dict[str, str],
-    language: str,
-    fatal_errors: list[str],
-) -> dict[str, str]:
-    """Ask LLM to fix ONLY compilation errors in test files (not test logic)."""
-    test_code = "\n\n".join(
-        f"### {fname}\n```{language}\n{content}\n```"
-        for fname, content in test_files.items()
-    )
-    src_code = "\n\n".join(
-        f"### {fname}\n```{language}\n{content}\n```"
-        for fname, content in source_code.items()
-    )
-    errors_text = "\n".join(fatal_errors[:30])
-    MAX_SRC = 6000
-    MAX_TEST = 10000
-
-    trunc_note = ""
-    if len(src_code) > MAX_SRC:
-        trunc_note += f"⚠️ Source code truncated from {len(src_code)} to {MAX_SRC} chars. "
-    if len(test_code) > MAX_TEST:
-        trunc_note += f"⚠️ Test code truncated from {len(test_code)} to {MAX_TEST} chars. "
-    if trunc_note:
-        logger.warning(f"[Stage6] Truncation: {trunc_note}")
-
-    prompt = f"""Fix ONLY compilation-level errors in the test code below.
-DO NOT change any test logic, assertions, or expected values.
-Only fix: import errors, undefined names, bad mock targets, wrong attribute references.
-
-{trunc_note}
-## Source Code (for reference — DO NOT MODIFY):
-{src_code[:MAX_SRC]}
-
-## Test Code (fix compilation errors ONLY):
-{test_code[:MAX_TEST]}
-
-## Compilation Errors to fix:
-{errors_text}
-
-## Requirements:
-- Fix ONLY the errors listed above
-- Keep all test function names and test logic unchanged
-- Return the COMPLETE corrected test files as a JSON object mapping filenames to content
-- Only output the JSON object, no other text.
-
-```json
-{{"test_file1.py": "full corrected content...", "test_file2.py": "full corrected content..."}}
-```
-"""
-    logger.info(f"[Stage6] Asking LLM to fix {len(fatal_errors)} compilation errors")
-    response = await chat(
-        prompt=prompt,
-        system_prompt=f"You are an expert {language} developer. Fix ONLY compilation errors. Output only valid JSON.",
-        temperature=0.2,
-        max_tokens=8192,
-    )
-    try:
-        from app.services.tools import clean_llm_json_response
-        cleaned = clean_llm_json_response(response)
-        fixed = json.loads(cleaned)
-        if _validate_files_match(fixed, test_files, "Stage6 fix"):
-            logger.info(f"[Stage6] LLM fixed test files: {list(fixed.keys())}")
-            # Only accept files that exist in original, replace content
-            result = {**test_files}
-            for k in test_files:
-                if k in fixed:
-                    result[k] = fixed[k]
-            return result
-        else:
-            logger.warning(f"[Stage6] LLM returned invalid files, keeping originals")
-            return test_files
-    except Exception as e:
-        logger.warning(f"[Stage6] Failed to parse LLM fix response: {e}")
-        return test_files
-
-
 async def _optimize_source_from_tests(
     source_code: dict[str, str],
     test_files: dict[str, str],
@@ -1012,7 +993,7 @@ async def _optimize_source_from_tests(
 ) -> dict[str, str]:
     """Ask LLM to optimize source code based on real pytest failures.
 
-    Returns updated source code only (test code is never modified by Stage 7).
+    Returns updated source code only (test code is never modified by Stage 6).
     The LLM receives the test code for context and previous round history so it
     can build on prior fixes rather than starting from scratch each round.
     """
@@ -1056,7 +1037,7 @@ async def _optimize_source_from_tests(
 ```
 Only output the JSON object, no other text.
 """
-    logger.info(f"[Stage7] Round {round_num}: asking LLM to fix {len(failures)} test failures (source only)")
+    logger.info(f"[Stage6] Round {round_num}: asking LLM to fix {len(failures)} test failures (source only)")
 
     response = await chat(
         prompt=prompt,
@@ -1069,18 +1050,18 @@ Only output the JSON object, no other text.
         from app.services.tools import clean_llm_json_response
         cleaned = clean_llm_json_response(response)
         fixed = json.loads(cleaned)
-        if _validate_files_match(fixed, source_code, "Stage7 optimize"):
-            logger.info(f"[Stage7] LLM returned optimized source files: {list(fixed.keys())}")
+        if _validate_files_match(fixed, source_code, "Stage6 optimize"):
+            logger.info(f"[Stage6] LLM returned optimized source files: {list(fixed.keys())}")
             result = {**source_code}
             for k in source_code:
                 if k in fixed:
                     result[k] = fixed[k]
             return result
         else:
-            logger.warning(f"[Stage7] LLM returned invalid files, keeping originals")
+            logger.warning(f"[Stage6] LLM returned invalid files, keeping originals")
             return source_code
     except Exception as e:
-        logger.warning(f"[Stage7] Failed to parse LLM optimization: {e}")
+        logger.warning(f"[Stage6] Failed to parse LLM optimization: {e}")
         return source_code
 
 
@@ -1488,6 +1469,9 @@ async def resume_pipeline(
     if not pipeline:
         raise ValueError(f"Pipeline not found: {pipeline_id}")
 
+    if _is_stopped(pipeline_id):
+        return
+
     current_code: dict[str, str] = {}
     test_files: dict[str, str] = {}
 
@@ -1521,6 +1505,7 @@ async def resume_pipeline(
                                            f"Adapting {len(existing_code)} existing source files to UML...")
                 try:
                     current_code = await adapt_code_to_uml(existing_code, optimized_diagram, language)
+                    if _is_stopped(pipeline_id): return
                 except Exception as e:
                     yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
                     return
@@ -1541,6 +1526,7 @@ async def resume_pipeline(
                 yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
                 return
 
+        if _is_stopped(pipeline_id): return
         if not current_code:
             logger.error("[Pipeline Stage 3] Code generation returned empty")
             yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
@@ -1670,6 +1656,7 @@ async def resume_pipeline(
                                        f"Incrementally updating {len(existing_tests)} existing test files...")
             try:
                 test_files = await update_tests_incremental(existing_tests, current_code, language, test_cases_data)
+                if _is_stopped(pipeline_id): return
                 if not test_files:
                     logger.warning("[Pipeline Stage 5] update_tests_incremental returned empty, falling back to full generation")
                 else:
@@ -1688,6 +1675,7 @@ async def resume_pipeline(
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
         try:
             test_files = await generate_tests(current_code, language, test_cases_data)
+            if _is_stopped(pipeline_id): return
             if not test_files:
                 logger.error("[Pipeline Stage 5] generate_tests returned empty — LLM JSON parse likely failed")
                 yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED,
@@ -1705,7 +1693,94 @@ async def resume_pipeline(
             yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.FAILED, str(e))
             return
 
-    # --- Stage 6 + Stage 7: Test exec + code optimize ---
+    # ═══════════════════════════════════════════════════════════════
+    # Stage 5b: ReAct Test Code Validation Gate
+    # ═══════════════════════════════════════════════════════════════
+    if test_files:
+        yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING,
+                                   "ReAct validating generated test code...")
+        try:
+            from app.services.react_engine import ReActEngine, _serialize_steps
+            # Merge source + test files so ReAct's check_imports can resolve
+            # cross-module imports (test code imports source modules).
+            combined_files = {**current_code, **test_files}
+            react = ReActEngine(max_rounds=3, validation_mode=True)
+            react_result = None
+            async for progress in react.run_code_validate_and_fix_stream(
+                language=language,
+                code_files=combined_files,
+                task_description="Validate generated test code — fix syntax errors, import errors, "
+                                 "and ensure all imports match the actual source API. "
+                                 "Do NOT modify test logic or assertions. "
+                                 "Source files are provided for import resolution ONLY — do NOT modify them.",
+            ):
+                if "result" in progress:
+                    react_result = progress["result"]
+                else:
+                    pipeline.stages[4].result = {
+                        **(pipeline.stages[4].result or {}),
+                        "test_files": list(test_files.keys()),
+                        "react_steps": progress["react_steps"],
+                    }
+                    pipeline.stages[4].logs = f"ReAct test validation round {progress['round']}/3..."
+                    yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
+
+            if react_result is None:
+                raise RuntimeError("ReAct test validation stream ended without result")
+
+            # Extract only test files from the combined result (ignore source files)
+            def _is_test_file(fname: str) -> bool:
+                return fname.startswith("test_") or fname.startswith("test")
+
+            if react_result.success:
+                if react_result.final_code:
+                    new_tests = {k: v for k, v in react_result.final_code.items() if _is_test_file(k)}
+                    if new_tests and new_tests != test_files:
+                        logger.info(f"[Stage 5b] ReAct fixed test files, updating: {list(new_tests.keys())}")
+                        test_files = new_tests
+                        for fname, content in test_files.items():
+                            for a in pipeline.code_artifacts:
+                                if a.filename == fname and a.version == 2:
+                                    a.content = content
+                        _save_generated_files(diagram.name, language, {}, test_files, target_test_dir=test_dir)
+
+                pipeline.stages[4].result = {
+                    **(pipeline.stages[4].result or {}),
+                    "test_files": list(test_files.keys()),
+                    "react_steps": _serialize_steps(react_result.steps),
+                    "react_summary": react_result.summary,
+                }
+                pipeline.stages[4].logs = f"Test validation OK: {len(test_files)} files"
+                yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
+            else:
+                # ReAct didn't fully succeed — use best-effort result, don't block
+                if react_result.final_code:
+                    new_tests = {k: v for k, v in react_result.final_code.items() if _is_test_file(k)}
+                    if new_tests:
+                        test_files = new_tests
+                pipeline.stages[4].result = {
+                    **(pipeline.stages[4].result or {}),
+                    "test_files": list(test_files.keys()),
+                    "react_steps": _serialize_steps(react_result.steps),
+                    "react_summary": react_result.summary,
+                    "react_issues": react_result.remaining_issues,
+                }
+                pipeline.stages[4].logs = (
+                    f"Test validation: {react_result.summary[:120]}"
+                    if react_result.summary else "Test validation completed with some issues"
+                )
+                yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
+        except Exception as e:
+            logger.exception(f"[Stage 5b] ReAct test validation crashed: {e}")
+            pipeline.stages[4].result = {
+                **(pipeline.stages[4].result or {}),
+                "test_files": list(test_files.keys()),
+                "react_error": str(e),
+            }
+            pipeline.stages[4].logs = f"Tests generated (validation skipped: {e})"
+            yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.SUCCESS)
+
+    # --- Stage 6: Test exec + code optimize ---
     async for event in _run_test_and_optimize(pipeline, diagram, language, current_code, test_files,
                                                source_dir=source_dir, test_dir=test_dir):
         yield event

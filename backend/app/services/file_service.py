@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 def ensure_dirs():
     os.makedirs(settings.uml_dir, exist_ok=True)
-    os.makedirs(settings.upload_dir, exist_ok=True)
 
 
 def save_diagram(diagram: UmlDiagram, filepath: str | None = None) -> str:
