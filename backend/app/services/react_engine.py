@@ -7,9 +7,7 @@ for reliable tool invocation — replaces the old text-based THOUGHT/ACTION pars
 
 import json
 import re
-import os
 import logging
-from datetime import datetime
 from dataclasses import dataclass, field
 
 from app.core.config import get_settings
@@ -18,56 +16,6 @@ from app.services.tools import create_tools, create_validation_tools
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-
-# ── Context saver ──────────────────────────────────
-
-def _save_context(messages: list, task_type: str = "") -> str:
-    """Save ReAct conversation context to context/ directory."""
-    ctx_dir = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "context"))
-    os.makedirs(ctx_dir, exist_ok=True)
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tag = f"_{task_type}" if task_type else ""
-    filename = f"context{tag}_{ts}.md"
-    filepath = os.path.join(ctx_dir, filename)
-
-    lines = [
-        f"# ReAct 引擎上下文记录",
-        f"",
-        f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"**任务类型**: {task_type or '通用'}",
-        f"**消息总数**: {len(messages)} 条",
-        f"",
-        f"---",
-        f"",
-    ]
-
-    for i, msg in enumerate(messages):
-        role = msg.get("role", "unknown")
-        content = msg.get("content", "")
-        # Handle tool calls in assistant messages
-        tool_calls = msg.get("tool_calls")
-        lines.append(f"### [{i+1}] {role.upper()}")
-        if content:
-            lines.append(f"```\n{str(content)[:3000]}\n```")
-        if tool_calls:
-            for tc in tool_calls:
-                fn = tc.get("function", {})
-                lines.append(f"- 🔧 **{fn.get('name', '?')}**")
-                lines.append(f"  ```json\n{fn.get('arguments', '')[:1000]}\n  ```")
-        lines.append("")
-
-    lines.extend([
-        "---",
-        f"*Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
-    ])
-
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-
-    logger.info(f"[Context] Saved: {filepath}")
-    return filepath
 
 
 # ── Data classes ───────────────────────────────────
@@ -626,11 +574,9 @@ Fix source code based on failures. Call finish_optimization when done."""
                     remaining_issues=finish_remaining,
                     messages=messages,
                 )
-                _save_context(messages, task_type)
                 return result
 
         # ── Max rounds reached ──
-        _save_context(messages, task_type)
         return ReActResult(
             success=False, final_code=current_code,
             summary=f"Incomplete after {self.max_rounds} rounds",
@@ -808,14 +754,12 @@ Fix source code based on failures. Call finish_optimization when done."""
                     steps=steps, rounds_used=round_num, remaining_issues=finish_remaining,
                     messages=messages,
                 )
-                _save_context(messages, task_type)
                 yield {"react_steps": _serialize_steps(steps), "round": round_num, "result": result}
                 return
             else:
                 yield {"react_steps": _serialize_steps(steps), "round": round_num}
 
         # Max rounds
-        _save_context(messages, task_type)
         yield {
             "react_steps": _serialize_steps(steps),
             "round": self.max_rounds,
@@ -897,7 +841,6 @@ Fix source code based on failures. Call finish_optimization when done."""
                     result = ReActResult(success=True, final_code=extracted,
                         summary="Extracted from response", steps=steps,
                         rounds_used=round_num, messages=messages)
-                    _save_context(messages, task_type)
                     return result
                 messages.append({"role": "assistant", "content": response_text})
                 step.observation = "No action parsed, continuing"
@@ -939,10 +882,8 @@ Fix source code based on failures. Call finish_optimization when done."""
                     remaining_issues=action_input.get("remaining_issues", ""),
                     messages=messages,
                 )
-                _save_context(messages, task_type)
                 return result
 
-        _save_context(messages, task_type)
         return ReActResult(
             success=False, final_code=current_code,
             summary=f"Incomplete after {self.max_rounds} rounds",
