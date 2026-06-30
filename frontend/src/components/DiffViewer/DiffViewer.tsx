@@ -7,25 +7,41 @@ import { Empty, Button, message, Tag, Input, Modal } from 'antd';
 import {
   CheckCircleOutlined, CloseCircleOutlined,
   SwapOutlined, FileTextOutlined, ReloadOutlined,
+  ApartmentOutlined, ClockCircleOutlined, BlockOutlined,
 } from '@ant-design/icons';
 import Editor from '@monaco-editor/react';
 import * as Diff from 'diff';
-import { useUiStore } from '../../stores/uiStore';
+import { useUiStore, DiffDiagramType } from '../../stores/uiStore';
 import { useDiagramStore } from '../../stores/diagramStore';
-import { saveReview, optimizeUml as apiOptimizeUml } from '../../services/api';
+import { saveReview, optimizeUml as apiOptimizeUml, optimizeProject as apiOptimizeProject } from '../../services/api';
 import './DiffViewer.css';
 
 const { TextArea } = Input;
 
 const DiffViewer: React.FC = () => {
-  const { setDiagram, diagram } = useDiagramStore();
+  const { setDiagram, diagram, setActiveDiagram, project } = useDiagramStore();
   const {
     originalCode, optimizedCode, diffContent,
     originalDiagram, optimizedDiagram,
+    originalDiagrams, optimizedDiagrams, diffContents,
+    activeDiffDiagramType, optimizationConsistencyReport,
     showingOptimized, toggleShowingVersion,
     setRightPanelTab, setOptimizationResult,
+    setGlobalOptimizationResult, setActiveDiffDiagramType,
     optimizeInstructions,
   } = useUiStore();
+
+  // Check if we're in multi-diagram mode (pipeline global optimize)
+  const hasMultiDiagrams = Object.keys(optimizedDiagrams).length > 0;
+  const availableTypes: DiffDiagramType[] = hasMultiDiagrams
+    ? (Object.keys(optimizedDiagrams) as DiffDiagramType[])
+    : (originalDiagram ? [(originalDiagram.diagram_type || 'class') as DiffDiagramType] : ['class']);
+
+  const TYPE_LABELS: Record<DiffDiagramType, { label: string; icon: React.ReactNode }> = {
+    class: { label: '类图', icon: <ApartmentOutlined /> },
+    sequence: { label: '时序图', icon: <ClockCircleOutlined /> },
+    component: { label: '组件图', icon: <BlockOutlined /> },
+  };
 
   const [reviewComment, setReviewComment] = useState('');
   const [saving, setSaving] = useState(false);
@@ -43,14 +59,43 @@ const DiffViewer: React.FC = () => {
     setRejectModalVisible(false);
   }, [optimizedCode]);
 
-  // Toggle canvas between original and optimized
+  // Toggle canvas between original and optimized (supports multi-diagram)
   const handleToggleCanvas = () => {
+    // Ensure the active diagram matches the diff tab (in case user switched via toolbar)
+    const targetType = hasMultiDiagrams ? activeDiffDiagramType : (originalDiagram?.diagram_type || 'class');
+    const targetIdx = project.diagrams.findIndex(
+      d => (d.diagram_type || 'class') === targetType
+    );
+    const currentActiveIdx = project.active_diagram_index;
+    if (targetIdx >= 0 && targetIdx !== currentActiveIdx) {
+      setActiveDiagram(targetIdx);
+    }
+    // Toggle between original and optimized using our stored copies
+    // (NOT project's stored version, which may have been polluted by prior toggles)
     if (showingOptimized) {
       if (originalDiagram) setDiagram(originalDiagram);
     } else {
       if (optimizedDiagram) setDiagram(optimizedDiagram);
     }
     toggleShowingVersion();
+  };
+
+  // Handle diagram-type tab switch → also switch main canvas and restore original
+  const handleTypeSwitch = (type: DiffDiagramType) => {
+    setActiveDiffDiagramType(type);
+    // Switch canvas to the correct diagram
+    const targetIdx = project.diagrams.findIndex(
+      d => (d.diagram_type || 'class') === type
+    );
+    if (targetIdx >= 0) {
+      setActiveDiagram(targetIdx);
+      // Always restore the original version on tab switch,
+      // because the project's stored version may have been polluted by a prior toggle
+      const orig = originalDiagrams[type];
+      if (orig) {
+        setDiagram(orig);
+      }
+    }
   };
 
   // Accept: show confirmation dialog first
@@ -65,16 +110,37 @@ const DiffViewer: React.FC = () => {
   };
 
   const handleAcceptConfirm = async () => {
-    if (!optimizedDiagram) return;
+    if (!optimizedDiagram && !hasMultiDiagrams) return;
     setSaving(true);
     try {
-      setDiagram(optimizedDiagram);
+      if (hasMultiDiagrams) {
+        // Apply all three optimized diagrams to their respective positions in the project
+        for (const type of Object.keys(optimizedDiagrams) as DiffDiagramType[]) {
+          const opt = optimizedDiagrams[type];
+          if (!opt) continue;
+          const idx = project.diagrams.findIndex(
+            d => (d.diagram_type || 'class') === type
+          );
+          if (idx >= 0) {
+            // Update that diagram in the project
+            const updatedDiagrams = [...project.diagrams];
+            updatedDiagrams[idx] = { ...updatedDiagrams[idx], ...opt };
+            useDiagramStore.setState({
+              project: { ...project, diagrams: updatedDiagrams },
+              diagram: updatedDiagrams[project.active_diagram_index],
+              isModified: true,
+            });
+          }
+        }
+      } else {
+        setDiagram(optimizedDiagram!);
+      }
       await saveReview({
         action: 'accept',
         comment: reviewComment,
         requirements: optimizeInstructions,
         original_name: originalDiagram?.name || '',
-        optimized_name: optimizedDiagram.name || '',
+        optimized_name: optimizedDiagram?.name || '',
         timestamp: new Date().toISOString(),
       });
       message.success('已接受优化结果，评审已保存到 dev_review.txt');
@@ -97,23 +163,54 @@ const DiffViewer: React.FC = () => {
   };
 
   const handleContinueOptimize = async () => {
-    if (!originalDiagram) return;
     setReoptimizing(true);
     const dt = originalDiagram?.diagram_type || 'class';
-    message.loading({ content: dt === 'sequence' ? 'LLM 正在重新优化时序图...' : 'LLM 正在重新优化 UML...', key: 'reoptimize' });
+    message.loading({ content: 'LLM 正在重新优化...', key: 'reoptimize' });
     try {
-      const result = await apiOptimizeUml(originalDiagram, rejectInstructions);
+      if (hasMultiDiagrams) {
+        // Re-run global optimization with all three diagrams
+        const classOrig = originalDiagrams.class || originalDiagram;
+        const result = await apiOptimizeProject({
+          class_diagram: classOrig,
+          sequence_diagram: originalDiagrams.sequence,
+          component_diagram: originalDiagrams.component,
+          instructions: rejectInstructions,
+        }) as any;
+        // Parse and push back to DiffViewer
+        const optimized = result.optimized || {};
+        const originals: Record<string, any> = {};
+        const optimizeds: Record<string, any> = {};
+        const diffs: Record<string, string> = {};
+        for (const type of (Object.keys(optimized) as DiffDiagramType[])) {
+          const orig = originalDiagrams[type] || (type === 'class' ? originalDiagram : null);
+          const opt = optimized[type];
+          if (orig && opt) {
+            originals[type] = orig;
+            // Merge LLM output with original metadata (diagram_type, name, etc.)
+            optimizeds[type] = { ...orig, ...opt };
+            diffs[type] = Diff.createPatch(
+              TYPE_LABELS[type]?.label || type,
+              JSON.stringify(orig, null, 2),
+              JSON.stringify(optimizeds[type], null, 2),
+              'Original', 'Optimized'
+            );
+          }
+        }
+        setGlobalOptimizationResult(originals, optimizeds, diffs,
+          result.consistency_report || [], rejectInstructions);
+      } else if (originalDiagram) {
+        const result = await apiOptimizeUml(originalDiagram, rejectInstructions);
+        setOptimizationResult(result.original, result.optimized, result.changes_summary, rejectInstructions);
+      }
       // Save the reject review first
       await saveReview({
         action: 'reject',
         comment: rejectInstructions || reviewComment || '(继续优化)',
         requirements: optimizeInstructions,
-        original_name: originalDiagram.name || '',
+        original_name: originalDiagram?.name || '',
         optimized_name: optimizedDiagram?.name || '',
         timestamp: new Date().toISOString(),
       });
-      // Update with new optimized result
-      setOptimizationResult(result.original, result.optimized, result.changes_summary, rejectInstructions);
       setRejectModalVisible(false);
       setResolved(false); // allow new accept/reject on the fresh result
       setReviewComment('');
@@ -167,8 +264,9 @@ const DiffViewer: React.FC = () => {
       optFormatted = JSON.stringify(JSON.parse(opt), null, 2);
     } catch {}
 
-    const dt = originalDiagram?.diagram_type || 'class';
-    const diagramLabel = dt === 'sequence' ? 'Sequence Diagram' : 'UML Diagram';
+    const dt = hasMultiDiagrams ? activeDiffDiagramType : (originalDiagram?.diagram_type || 'class');
+    const labelMap: Record<string, string> = { class: 'Class Diagram', sequence: 'Sequence Diagram', component: 'Component Diagram' };
+    const diagramLabel = labelMap[dt] || 'UML Diagram';
     return Diff.createPatch(diagramLabel, origFormatted, optFormatted,
       'Original', 'Optimized');
   }, [originalCode, optimizedCode]);
@@ -189,7 +287,11 @@ const DiffViewer: React.FC = () => {
     <div className="diff-viewer">
       {/* Header with toggle */}
       <div className="diff-header">
-        <h3>{originalDiagram?.diagram_type === 'sequence' ? '时序图优化对比' : 'UML 优化对比'}</h3>
+        <h3>
+          {hasMultiDiagrams
+            ? '全局优化对比'
+            : (originalDiagram?.diagram_type === 'sequence' ? '时序图优化对比' : 'UML 优化对比')}
+        </h3>
         <Button
           icon={<SwapOutlined />}
           size="small"
@@ -199,6 +301,40 @@ const DiffViewer: React.FC = () => {
           {showingOptimized ? '画布: 优化版' : '画布: 原始版'}
         </Button>
       </div>
+
+      {/* Diagram type tabs (shown when multi-diagram data is available) */}
+      {hasMultiDiagrams && availableTypes.length > 1 && (
+        <div className="diff-type-tabs" style={{ display: 'flex', gap: 4, marginBottom: 8, flexWrap: 'wrap' }}>
+          {availableTypes.map(type => {
+            const info = TYPE_LABELS[type];
+            const hasData = !!optimizedDiagrams[type];
+            return (
+              <Button
+                key={type}
+                size="small"
+                type={activeDiffDiagramType === type ? 'primary' : 'default'}
+                icon={info?.icon}
+                disabled={!hasData}
+                onClick={() => handleTypeSwitch(type)}
+              >
+                {info?.label || type}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Consistency report (global optimization cross-validation findings) */}
+      {optimizationConsistencyReport && optimizationConsistencyReport.length > 0 && (
+        <div className="diff-summary" style={{ backgroundColor: '#fff7e6', borderLeft: '3px solid #faad14' }}>
+          <Tag color="orange">一致性报告</Tag>
+          {optimizationConsistencyReport.map((item: any, i: number) => (
+            <p key={i} style={{ fontSize: 12, margin: '2px 0' }}>
+              {item.severity === 'error' ? '❌' : '⚠️'} {item.msg}
+            </p>
+          ))}
+        </div>
+      )}
 
       {/* Toggle hint */}
       <div className="diff-toggle-hint">

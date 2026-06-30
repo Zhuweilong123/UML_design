@@ -6,6 +6,7 @@ import type { UmlDiagram } from '../types/uml';
 export type RightPanelTab = 'properties' | 'code' | 'pipeline' | 'diff' | 'testcase';
 export type Language = 'python' | 'java' | 'typescript' | 'javascript' | 'csharp' | 'cpp' |
   'go' | 'rust' | 'ruby' | 'swift' | 'kotlin' | 'php';
+export type DiffDiagramType = 'class' | 'sequence' | 'component';
 
 interface UiState {
   // Panel visibility
@@ -32,6 +33,14 @@ interface UiState {
   optimizedDiagram: UmlDiagram | null;
   showingOptimized: boolean;
   optimizeInstructions: string; // last optimization request content
+
+  // Global multi-diagram optimization (pipeline Stage 1)
+  originalDiagrams: Record<string, any>;     // { class: {...}, sequence: {...}, component: {...} }
+  optimizedDiagrams: Record<string, any>;
+  diffContents: Record<string, string>;       // per-type diff text
+  activeDiffDiagramType: DiffDiagramType;     // which diagram tab is active in DiffViewer
+  optimizationConsistencyReport: any[];        // cross-validation consistency report
+
   showTestCaseInCanvas: boolean; // toggle main canvas to show test cases
   testCaseData: string; // Excel test case summary for pipeline Stage 5
 
@@ -62,6 +71,14 @@ interface UiState {
   setOriginalCode: (code: Record<string, string> | null) => void;
   setOptimizedCode: (code: Record<string, string> | null) => void;
   setOptimizationResult: (original: UmlDiagram, optimized: UmlDiagram, diff: string, instructions: string) => void;
+  setGlobalOptimizationResult: (
+    originals: Record<string, any>,
+    optimizeds: Record<string, any>,
+    diffs: Record<string, string>,
+    report: any[],
+    instructions: string,
+  ) => void;
+  setActiveDiffDiagramType: (type: DiffDiagramType) => void;
   toggleShowingVersion: () => void;
   setShowingOptimized: (v: boolean) => void;
   toggleTestCaseInCanvas: () => void;
@@ -78,7 +95,7 @@ interface UiState {
   setCurrentBrowsePath: (path: string) => void;
 }
 
-export const useUiStore = create<UiState>((set) => ({
+export const useUiStore = create<UiState>((set, get) => ({
   rightPanelVisible: true,
   rightPanelTab: 'properties',
   rightPanelWidth: 420,
@@ -94,6 +111,11 @@ export const useUiStore = create<UiState>((set) => ({
   optimizedDiagram: null,
   showingOptimized: false,
   optimizeInstructions: '',
+  originalDiagrams: {},
+  optimizedDiagrams: {},
+  diffContents: {},
+  activeDiffDiagramType: 'class',
+  optimizationConsistencyReport: [],
   showTestCaseInCanvas: false,
   testCaseData: '',
   activePipelineId: null,
@@ -131,6 +153,44 @@ export const useUiStore = create<UiState>((set) => ({
     optimizeInstructions: instructions || '',
     showingOptimized: false,
   }),
+
+  setGlobalOptimizationResult: (originals, optimizeds, diffs, report, instructions) => {
+    const firstType = (Object.keys(optimizeds)[0] || 'class') as DiffDiagramType;
+    const firstOrig = originals[firstType];
+    const firstOpt = optimizeds[firstType];
+    const firstDiff = diffs[firstType] || '';
+    set({
+      originalDiagrams: originals,
+      optimizedDiagrams: optimizeds,
+      diffContents: diffs,
+      activeDiffDiagramType: firstType,
+      optimizationConsistencyReport: report || [],
+      // Also populate single-diagram fields for backward compat
+      originalDiagram: firstOrig || null,
+      optimizedDiagram: firstOpt || null,
+      originalCode: firstOrig ? { [`original_${firstType}.json`]: JSON.stringify(firstOrig, null, 2) } : null,
+      optimizedCode: firstOpt ? { [`optimized_${firstType}.json`]: JSON.stringify(firstOpt, null, 2) } : null,
+      diffContent: firstDiff,
+      optimizeInstructions: instructions || '',
+      showingOptimized: false,
+    });
+  },
+
+  setActiveDiffDiagramType: (type) => {
+    const state = get();
+    const orig = state.originalDiagrams[type];
+    const opt = state.optimizedDiagrams[type];
+    const diff = state.diffContents[type] || '';
+    set({
+      activeDiffDiagramType: type,
+      originalDiagram: orig || null,
+      optimizedDiagram: opt || null,
+      originalCode: orig ? { [`original_${type}.json`]: JSON.stringify(orig, null, 2) } : null,
+      optimizedCode: opt ? { [`optimized_${type}.json`]: JSON.stringify(opt, null, 2) } : null,
+      diffContent: diff,
+      showingOptimized: false,
+    });
+  },
 
   toggleShowingVersion: () => set((s) => ({ showingOptimized: !s.showingOptimized })),
   setShowingOptimized: (v) => set({ showingOptimized: v }),

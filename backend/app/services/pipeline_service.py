@@ -1,4 +1,4 @@
-"""Pipeline orchestration service – manages the 7-stage automation pipeline."""
+"""Pipeline orchestration service – manages the 6-stage automation pipeline."""
 
 from datetime import datetime
 from typing import AsyncIterator
@@ -12,7 +12,7 @@ from app.models.pipeline import (
 )
 from app.services.llm_service import chat
 from app.services.code_generator import (
-    generate_code, generate_tests, optimize_uml,
+    generate_code, generate_tests, optimize_project,
     adapt_code_to_uml, update_tests_incremental,
     generate_integrated_code,
 )
@@ -524,7 +524,7 @@ async def run_pipeline(
     component_diagram: dict | None = None,
     max_change_ratio: int = 0,
 ) -> AsyncIterator[dict]:
-    """Run the 7-stage pipeline, yielding progress updates.
+    """Run the 6-stage pipeline, yielding progress updates.
 
     ``max_change_ratio`` (0-100): when >0, Stage 3 ReAct validation will
     enforce a per-file change limit against the original code. 0 = disabled.
@@ -538,7 +538,7 @@ async def run_pipeline(
     test_files: dict[str, str] = {}
     test_results = ""
 
-    # --- Stage 1: UML Optimize ---
+    # --- Stage 1: UML Optimize (global: cross-validate all 3 diagram types) ---
     if _is_stopped(pipeline_id): return
     yield await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.RUNNING,
                                "Requesting optimization instructions...")
@@ -554,11 +554,23 @@ async def run_pipeline(
         return  # Wait for instructions via WebSocket, then resume
 
     try:
-        opt_result = await optimize_uml(diagram, instructions)
+        # Global optimization: pass class + sequence + component diagrams together
+        opt_result = await optimize_project(
+            class_diagram=diagram.model_dump(),
+            sequence_diagram=sequence_diagram,
+            component_diagram=component_diagram,
+            instructions=instructions,
+        )
         if _is_stopped(pipeline_id): return
-        optimized_data = opt_result.get("optimized", diagram.model_dump())
-        if isinstance(optimized_data, dict):
-            optimized_diagram = UmlDiagram(**optimized_data)
+
+        # Extract optimized class diagram from the three-diagram result
+        optimized_all = opt_result.get("optimized", {})
+        optimized_class_data = optimized_all.get("class") if isinstance(optimized_all, dict) else None
+        if optimized_class_data and isinstance(optimized_class_data, dict):
+            optimized_diagram = UmlDiagram(**optimized_class_data)
+        else:
+            optimized_diagram = diagram
+
         pipeline.stages[0].result = opt_result
         pipeline.stages[0].logs = opt_result.get("changes_summary", "")
         yield await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.SUCCESS)
@@ -1493,8 +1505,10 @@ async def resume_pipeline(
 
     if need_code_gen:
         # Use optimized diagram if available from stage 1
+        # (result.optimized now contains {"class":..., "sequence":..., "component":...})
         opt_result = pipeline.stages[0].result or {}
-        optimized_data = opt_result.get("optimized")
+        optimized_all = opt_result.get("optimized", {})
+        optimized_data = optimized_all.get("class") if isinstance(optimized_all, dict) else None
         optimized_diagram = UmlDiagram(**optimized_data) if optimized_data else diagram
 
         # --- Stage 3: Code Gen ---

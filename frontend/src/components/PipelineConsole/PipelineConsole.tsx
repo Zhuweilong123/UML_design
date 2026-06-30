@@ -21,6 +21,7 @@ import {
   createPipelineWs, confirmStage, getPipeline, createPipeline,
   browseDirectory, type BrowseResult,
 } from '../../services/api';
+import * as Diff from 'diff';
 import './PipelineConsole.css';
 
 const PipelineConsole: React.FC = () => {
@@ -180,14 +181,64 @@ const PipelineConsole: React.FC = () => {
           if (data.stage === 'uml_optimize' && data.status === 'success') {
             const store = useUiStore.getState();
             const result = data.data?.stages?.[0]?.result || {};
-            const original = useDiagramStore.getState().diagram;
-            const optimized = result.optimized;
-            const diff = result.diff || result.changes_summary || '';
-            if (original && optimized) {
-              store.setOptimizationResult(original, optimized, diff, '');
+            const optimizedAll = result.optimized || {};
+            const project = useDiagramStore.getState().project;
+
+            // Check if this is a global optimization result (has class/sequence/component keys)
+            if (typeof optimizedAll === 'object' && (optimizedAll.class || optimizedAll.sequence || optimizedAll.component)) {
+              // Global multi-diagram optimization
+              const originals: Record<string, any> = {};
+              const optimizeds: Record<string, any> = {};
+              const diffs: Record<string, string> = {};
+
+              // Find diagrams by type — do NOT use getState().diagram (active may be wrong type)
+              const classOrig = project.diagrams.find(d => (d.diagram_type || 'class') === 'class');
+              const seqOrig = project.diagrams.find(d => d.diagram_type === 'sequence');
+              const compOrig = project.diagrams.find(d => d.diagram_type === 'component');
+
+              const typeMap: Array<{ key: string; orig: any }> = [
+                { key: 'class', orig: classOrig },
+                { key: 'sequence', orig: seqOrig },
+                { key: 'component', orig: compOrig },
+              ];
+
+              const labelMap: Record<string, string> = { class: 'Class Diagram', sequence: 'Sequence Diagram', component: 'Component Diagram' };
+
+              for (const { key, orig } of typeMap) {
+                const opt = optimizedAll[key];
+                if (opt && orig) {
+                  originals[key] = orig;
+                  // Merge LLM output with original metadata (diagram_type, name, etc.)
+                  optimizeds[key] = { ...orig, ...opt };
+                  diffs[key] = Diff.createPatch(
+                    labelMap[key] || key,
+                    JSON.stringify(orig, null, 2),
+                    JSON.stringify(optimizeds[key], null, 2),
+                    'Original', 'Optimized'
+                  );
+                }
+              }
+
+              if (Object.keys(optimizeds).length > 0) {
+                store.setGlobalOptimizationResult(
+                  originals, optimizeds, diffs,
+                  result.consistency_report || [],
+                  ''
+                );
+              }
+              store.setRightPanelTab('diff');
+              store.setRightPanelVisible(true);
+            } else {
+              // Single diagram optimization (fallback for standalone optimize_uml results)
+              const original = useDiagramStore.getState().diagram;
+              const optimized = result.optimized;
+              const diff = result.diff || result.changes_summary || '';
+              if (original && optimized) {
+                store.setOptimizationResult(original, optimized, diff, '');
+              }
+              store.setRightPanelTab('diff');
+              store.setRightPanelVisible(true);
             }
-            store.setRightPanelTab('diff');
-            store.setRightPanelVisible(true);
           }
           // When Case Review stage starts, switch main canvas to test cases
           if (data.stage === 'case_review' && data.status === 'running') {
@@ -588,7 +639,7 @@ const PipelineConsole: React.FC = () => {
 
       {/* ── Optimization Instructions Modal ──────────── */}
       <Modal
-        title="UML 优化需求"
+        title="全局设计优化"
         open={instructionsVisible}
         onCancel={handleSkipInstructions}
         onOk={handleSubmitInstructions}
@@ -597,14 +648,30 @@ const PipelineConsole: React.FC = () => {
         width={550}
       >
         <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
-          当前类图包含 <strong>{diagram.classes.length}</strong> 个类，
-          <strong>{diagram.relations.length}</strong> 条关系。
+          当前项目包含
+          {(() => {
+            const proj = useDiagramStore.getState().project;
+            const types = proj.diagrams.map(d => {
+              const t = d.diagram_type || 'class';
+              const labelMap: Record<string, string> = { class: '类图', sequence: '时序图', component: '组件图' };
+              const countMap: Record<string, number> = {
+                class: (d.classes || []).length,
+                sequence: (d.lifelines || []).length,
+                component: (d.components || []).length,
+              };
+              return `${labelMap[t] || t}(${countMap[t] || 0}元素)`;
+            });
+            return <span>{types.join('、')}</span>;
+          })()}。
+          LLM 将交叉校验三种图的一致性并综合优化。
+        </p>
+        <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
           请输入优化需求（可选）：
         </p>
         <Input.TextArea
           value={pipelineInstructions}
           onChange={(e) => setPipelineInstructions(e.target.value)}
-          placeholder={'例如：\n• 将User和Order改为聚合关系\n• 为Payment添加refund方法\n• 提取公共接口IPayable\n• 优化类的职责划分，减少耦合\n...\n留空则进行通用优化'}
+          placeholder={'例如：\n• 检查时序图调用的方法在类图中是否都有定义\n• 优化组件间依赖关系，降低耦合\n• 统一各图的命名规范\n• 补充缺失的接口和交互消息\n• 调整类图结构以匹配时序图交互流程\n...\n留空则进行通用综合优化'}
           rows={5}
           autoFocus
         />
