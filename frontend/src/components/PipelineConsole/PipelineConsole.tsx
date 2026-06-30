@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Button, Steps, Tag, message, Alert, Space, Progress, Modal, Input,
+  Button, Steps, Tag, message, Alert, Space, Progress, Modal, Input, InputNumber, Tooltip,
 } from 'antd';
 import {
   PlayCircleOutlined, StopOutlined,
@@ -15,7 +15,7 @@ import {
 import { useDiagramStore } from '../../stores/diagramStore';
 import { useUiStore } from '../../stores/uiStore';
 import {
-  type PipelineState, StageStatus, StageName, STAGE_LABELS,
+  type PipelineState, type ReActStep, StageStatus, StageName, STAGE_LABELS,
 } from '../../types/pipeline';
 import {
   createPipelineWs, confirmStage, getPipeline, createPipeline,
@@ -38,6 +38,8 @@ const PipelineConsole: React.FC = () => {
   const testCaseData = useUiStore(s => s.testCaseData);
   const [instructionsVisible, setInstructionsVisible] = useState(false);
   const [pipelineInstructions, setPipelineInstructions] = useState('');
+  const [expandedReActStage, setExpandedReActStage] = useState<string | null>(null);
+  const [maxChangeRatio, setMaxChangeRatio] = useState(50);  // 0=disabled, default 50%
   const wsRef = useRef<WebSocket | null>(null);
 
   // ── Directory browsing state ─────────────────────────
@@ -159,7 +161,7 @@ const PipelineConsole: React.FC = () => {
       const srcDir = useUiStore.getState().pipelineSourceDir;
       const tstDir = useUiStore.getState().pipelineTestDir;
       const ws = createPipelineWs(pipeId, diagram, selectedLanguage, false, srcDir, tstDir,
-        useDiagramStore.getState().project);
+        useDiagramStore.getState().project, maxChangeRatio);
       wsRef.current = ws;
 
       ws.onmessage = (event) => {
@@ -174,9 +176,16 @@ const PipelineConsole: React.FC = () => {
           const statusIcon = statusIconMap[data.status] || '';
           setCurrentAction(`${statusIcon} ${stageLabel}: ${data.logs || data.status}`);
 
-          // When UML optimize succeeds, switch to diff panel
+          // When UML optimize succeeds, push result to diff viewer and switch panel
           if (data.stage === 'uml_optimize' && data.status === 'success') {
             const store = useUiStore.getState();
+            const result = data.data?.stages?.[0]?.result || {};
+            const original = useDiagramStore.getState().diagram;
+            const optimized = result.optimized;
+            const diff = result.diff || result.changes_summary || '';
+            if (original && optimized) {
+              store.setOptimizationResult(original, optimized, diff, '');
+            }
             store.setRightPanelTab('diff');
             store.setRightPanelVisible(true);
           }
@@ -288,9 +297,22 @@ const PipelineConsole: React.FC = () => {
           )}
         </span>
       ),
-      description: stage.logs ? (
-        <span className="stage-logs">{stage.logs}</span>
-      ) : undefined,
+      description: (
+        <div>
+          {stage.logs && <span className="stage-logs">{stage.logs}</span>}
+          {stage.name === StageName.CODE_GEN && stage.result?.react_steps
+            ? (
+              <ReActTrace
+                steps={stage.result.react_steps as ReActStep[]}
+                expanded={expandedReActStage === stage.name}
+                onToggle={() => setExpandedReActStage(
+                  expandedReActStage === stage.name ? null : stage.name
+                )}
+              />
+            )
+            : null}
+        </div>
+      ),
       status,
     };
   });
@@ -307,13 +329,26 @@ const PipelineConsole: React.FC = () => {
         <h3>自动化流水线</h3>
         <Space>
           {!running && !isWaitingConfirm && (
-            <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              onClick={handleStart}
-            >
-              启动流水线
-            </Button>
+            <>
+              <Button
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                onClick={handleStart}
+              >
+                启动流水线
+              </Button>
+              <Tooltip title="已有项目代码改动上限（%），0=不限">
+                <span style={{ fontSize: 11, color: '#999', marginLeft: 8 }}>变更上限</span>
+                <InputNumber
+                  size="small"
+                  min={0} max={100}
+                  value={maxChangeRatio}
+                  onChange={v => setMaxChangeRatio(v ?? 0)}
+                  style={{ width: 65, marginLeft: 4 }}
+                  addonAfter="%"
+                />
+              </Tooltip>
+            </>
           )}
           {(running || isWaitingConfirm) && (
             <Button
@@ -573,6 +608,53 @@ const PipelineConsole: React.FC = () => {
           autoFocus
         />
       </Modal>
+    </div>
+  );
+};
+
+// ── Inline ReAct trace component ──────────────────
+
+const ReActTrace: React.FC<{
+  steps: ReActStep[];
+  expanded: boolean;
+  onToggle: () => void;
+}> = ({ steps, expanded, onToggle }) => {
+  return (
+    <div className="react-trace">
+      <Button type="link" size="small" onClick={onToggle}>
+        {expanded ? '收起推理过程' : '查看推理过程'} ({steps.length} 步)
+      </Button>
+      {expanded && (
+        <div className="react-steps">
+          {steps.map((step, i) => {
+            const actions = (step.action || '')
+              .split(',')
+              .map(a => a.trim())
+              .filter(Boolean);
+            return (
+              <div key={i} className="react-step">
+                <div className="react-step-header">
+                  <Tag color="blue">轮次 {step.round}</Tag>
+                  {actions.map((a, j) => (
+                    <code key={j}>{a}</code>
+                  ))}
+                  {step.is_final && <Tag color="green">完成</Tag>}
+                </div>
+                {step.thought && (
+                  <div className="react-thought">
+                    <strong>思考:</strong> {step.thought.slice(0, 200)}
+                  </div>
+                )}
+                {step.observation && (
+                  <div className="react-observation">
+                    <pre>{step.observation}</pre>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

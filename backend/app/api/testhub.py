@@ -21,8 +21,11 @@ settings = get_settings()
 TESTHUB_DIR = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "testHub"))
 
 
-def _get_testhub_dir():
-    d = TESTHUB_DIR
+def _get_testhub_dir(dir_override: str | None = None):
+    if dir_override:
+        d = os.path.abspath(dir_override)
+    else:
+        d = TESTHUB_DIR
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -30,31 +33,32 @@ def _get_testhub_dir():
 # ── List Excel files ───────────────────────────────────
 
 @router.get("/list")
-async def list_test_files():
-    """List all Excel files in testHub directory."""
-    d = _get_testhub_dir()
+async def list_test_files(dir: str | None = None):
+    """List all Excel files in testHub directory (or custom dir)."""
+    d = _get_testhub_dir(dir)
     files = []
-    for name in sorted(os.listdir(d)):
-        if name.endswith(('.xlsx', '.xls')) and not name.startswith('~'):
-            fp = os.path.join(d, name)
-            files.append({
-                "name": name,
-                "path": fp.replace("\\", "/"),
-                "size": os.path.getsize(fp),
-                "modified": datetime.fromtimestamp(os.path.getmtime(fp)).isoformat(),
-            })
+    if os.path.isdir(d):
+        for name in sorted(os.listdir(d)):
+            if name.endswith(('.xlsx', '.xls')) and not name.startswith('~'):
+                fp = os.path.join(d, name)
+                files.append({
+                    "name": name,
+                    "path": fp.replace("\\", "/"),
+                    "size": os.path.getsize(fp),
+                    "modified": datetime.fromtimestamp(os.path.getmtime(fp)).isoformat(),
+                })
     return {"files": files, "testhub_dir": d.replace("\\", "/")}
 
 
 # ── Load Excel sheets ──────────────────────────────────
 
 @router.get("/load")
-async def load_test_file(filename: str = ""):
+async def load_test_file(filename: str = "", dir: str | None = None):
     """Load an Excel file and return all sheets with data."""
     if not openpyxl:
         raise HTTPException(status_code=500, detail="openpyxl not installed")
 
-    d = _get_testhub_dir()
+    d = _get_testhub_dir(dir)
     fp = os.path.join(d, filename)
     if not os.path.exists(fp):
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")

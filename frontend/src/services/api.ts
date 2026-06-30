@@ -131,6 +131,7 @@ export function createPipelineWs(
   sourceDir = '',
   testDir = '',
   project?: Project,
+  maxChangeRatio = 0,
 ): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const tokenParam = API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : '';
@@ -142,6 +143,7 @@ export function createPipelineWs(
       source_dir: sourceDir,
       test_dir: testDir,
       project: project || {},
+      max_change_ratio: maxChangeRatio,
     }));
   };
   return ws;
@@ -183,21 +185,23 @@ export async function saveGeneratedCode(req: {
 
 // ─── TestHub ──────────────────────────────────────────
 
-export async function listTestFiles(): Promise<{
+export async function listTestFiles(dir?: string): Promise<{
   files: Array<{ name: string; path: string; size: number; modified: string }>;
   testhub_dir: string;
 }> {
-  const { data } = await api.get('/testhub/list');
+  const { data } = await api.get('/testhub/list', { params: dir ? { dir } : {} });
   return data;
 }
 
-export async function loadTestFile(filename: string): Promise<{
+export async function loadTestFile(filename: string, dir?: string): Promise<{
   filename: string;
   sheets: Record<string, { headers: string[]; rows: Record<string, string>[] }>;
   sheet_names: string[];
   filepath: string;
 }> {
-  const { data } = await api.get('/testhub/load', { params: { filename } });
+  const params: Record<string, string> = { filename };
+  if (dir) params.dir = dir;
+  const { data } = await api.get('/testhub/load', { params });
   return data;
 }
 

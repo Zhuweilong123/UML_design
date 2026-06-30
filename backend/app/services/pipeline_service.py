@@ -92,10 +92,30 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
 
         if s.name == StageName.CODE_GEN:
             files = result.get("files", [])
+            react_steps = result.get("react_steps", [])
+            react_summary = result.get("react_summary", "")
+            react_error = result.get("react_error", "")
             lines.append(f"**生成文件**: {len(files)} 个")
             for f in files:
                 lines.append(f"- `{f}`")
             lines.append("")
+
+            if react_error:
+                lines.append(f"⚠️ **验证异常**: {react_error}")
+                lines.append("")
+            elif react_steps:
+                lines.append(f"**ReAct 验证步骤**: {len(react_steps)} 步")
+                if react_summary:
+                    lines.append(f"**验证结果**: {react_summary}")
+                lines.append("")
+                lines.append("| 轮次 | 动作 | 观察结果 |")
+                lines.append("|------|------|---------|")
+                for step in react_steps:
+                    obs = str(step.get("observation", ""))[:800]
+                    action = step.get("action", "-")
+                    is_final = " ✅" if step.get("is_final") else ""
+                    lines.append(f"| {step.get('round', '-')} | `{action}`{is_final} | {obs} |")
+                lines.append("")
 
         elif s.name == StageName.TEST_GEN:
             files = result.get("test_files", [])
@@ -113,7 +133,7 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
                 lines.append("| 轮次 | 动作 | 观察结果 |")
                 lines.append("|------|------|---------|")
                 for step in react_steps:
-                    obs = str(step.get("observation", ""))[:100]
+                    obs = str(step.get("observation", ""))[:200]
                     lines.append(f"| {step.get('round', '-')} | `{step.get('action', '-')}` | {obs} |")
                 lines.append("")
             if test_results:
@@ -347,6 +367,7 @@ async def resume_with_instructions(
     test_dir: str = "",
     sequence_diagram: dict | None = None,
     component_diagram: dict | None = None,
+    max_change_ratio: int = 0,
 ) -> AsyncIterator[dict]:
     """Resume pipeline from Stage 1 with optimization instructions."""
     async for event in run_pipeline(
@@ -355,6 +376,7 @@ async def resume_with_instructions(
         source_dir=source_dir, test_dir=test_dir,
         sequence_diagram=sequence_diagram,
         component_diagram=component_diagram,
+        max_change_ratio=max_change_ratio,
     ):
         yield event
 
@@ -428,8 +450,13 @@ async def run_pipeline(
     test_dir: str = "",
     sequence_diagram: dict | None = None,
     component_diagram: dict | None = None,
+    max_change_ratio: int = 0,
 ) -> AsyncIterator[dict]:
-    """Run the 7-stage pipeline, yielding progress updates."""
+    """Run the 7-stage pipeline, yielding progress updates.
+
+    ``max_change_ratio`` (0-100): when >0, Stage 3 ReAct validation will
+    enforce a per-file change limit against the original code. 0 = disabled.
+    """
     pipeline = _pipelines.get(pipeline_id)
     if not pipeline:
         raise ValueError(f"Pipeline not found: {pipeline_id}")
@@ -498,7 +525,7 @@ async def run_pipeline(
                 pipeline.stages[2].result = {"files": list(current_code.keys())}
                 _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
                 pipeline.stages[2].logs = f"Adapted {len(existing_code)} existing files → {len(current_code)} files from: {source_dir}"
-                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+                logger.info("[Pipeline Stage 3] Code adaptation done, proceeding to validation")
             except Exception as e:
                 yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
                 return
@@ -527,10 +554,81 @@ async def run_pipeline(
             pipeline.stages[2].result = {"files": list(current_code.keys())}
             _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
             pipeline.stages[2].logs = "Generated: generated/src/"
-            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+            logger.info("[Pipeline Stage 3] Code generation done, proceeding to validation")
         except Exception as e:
             yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
             return
+
+    # ═══════════════════════════════════════════════════════════════
+    # Stage 3b: ReAct Code Validation Gate
+    # ═══════════════════════════════════════════════════════════════
+    if current_code:
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING,
+                                   "ReAct validating generated code...")
+        try:
+            from app.services.react_engine import ReActEngine, _serialize_steps
+            # Only enforce change ratio for existing projects (source_dir non-empty)
+            _ratio = max_change_ratio if source_dir else 0
+            react = ReActEngine(max_rounds=5, validation_mode=True, max_change_ratio=_ratio)
+            react_result = None
+            async for progress in react.run_code_validate_and_fix_stream(
+                language=language,
+                code_files=current_code,
+                task_description="Validate generated code — fix syntax, import, and runtime errors",
+            ):
+                if "result" in progress:
+                    react_result = progress["result"]
+                else:
+                    # Intermediate round progress — push to frontend immediately
+                    pipeline.stages[2].result = {
+                        **(pipeline.stages[2].result or {}),
+                        "files": list(current_code.keys()),
+                        "react_steps": progress["react_steps"],
+                    }
+                    pipeline.stages[2].logs = f"ReAct round {progress['round']}/{5}..."
+                    yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+
+            if react_result is None:
+                raise RuntimeError("ReAct stream ended without result")
+
+            if react_result.success:
+                if react_result.final_code and react_result.final_code != current_code:
+                    logger.info("[Stage 3] ReAct fixed code, updating current_code")
+                    current_code = react_result.final_code
+                    for fname, content in current_code.items():
+                        for a in pipeline.code_artifacts:
+                            if a.filename == fname and a.version == 1:
+                                a.content = content
+                    _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
+
+                pipeline.stages[2].result = {
+                    **(pipeline.stages[2].result or {}),
+                    "files": list(current_code.keys()),
+                    "react_steps": _serialize_steps(react_result.steps),
+                    "react_summary": react_result.summary,
+                }
+                pipeline.stages[2].logs = f"Validated: {len(current_code)} files OK"
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+            else:
+                pipeline.stages[2].result = {
+                    **(pipeline.stages[2].result or {}),
+                    "files": list(current_code.keys()),
+                    "react_steps": _serialize_steps(react_result.steps),
+                    "react_summary": react_result.summary,
+                    "remaining_issues": react_result.remaining_issues,
+                }
+                pipeline.stages[2].logs = f"Validation incomplete after {react_result.rounds_used} rounds"
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
+                                           react_result.summary)
+                return
+        except Exception as e:
+            logger.exception(f"[Stage 3] ReAct validation crashed: {e}")
+            pipeline.stages[2].result = {
+                **(pipeline.stages[2].result or {}),
+                "react_error": str(e),
+            }
+            pipeline.stages[2].logs = f"Generated (validation skipped: {e})"
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
 
     # --- Stage 4: Case Review ---
     yield await _update_stage(pipeline, StageName.CASE_REVIEW, StageStatus.RUNNING,
@@ -1383,6 +1481,7 @@ async def resume_pipeline(
     test_dir: str = "",
     sequence_diagram: dict | None = None,
     component_diagram: dict | None = None,
+    max_change_ratio: int = 0,
 ) -> AsyncIterator[dict]:
     """Resume pipeline from the dev_confirm stage or after case review."""
     pipeline = _pipelines.get(pipeline_id)
@@ -1403,7 +1502,7 @@ async def resume_pipeline(
             current_code = _load_source_from_disk(diagram.name, language)
         if current_code:
             logger.info(f"[Pipeline] Loaded {len(current_code)} cached source files from: {source_dir or 'artifacts/disk'}: {list(current_code.keys())}")
-            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS, "Using cached code")
+            # Don't re-update Stage 3 — it was already SUCCESS from the first run
         else:
             logger.warning("[Pipeline] No cached source code found, regenerating...")
             need_code_gen = True
@@ -1455,7 +1554,78 @@ async def resume_pipeline(
         pipeline.stages[2].result = {"files": list(current_code.keys())}
         _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
         pipeline.stages[2].logs = f"Saved to: {source_dir or f'generated/src/{diagram.name}/{language}/'}"
-        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+        logger.info("[Pipeline Stage 3] Code generation done, proceeding to validation")
+
+    # ═══════════════════════════════════════════════════════════════
+    # Stage 3b: ReAct Code Validation Gate (resume_pipeline)
+    # Only run when new code was generated — skip when reusing cached code
+    # ═══════════════════════════════════════════════════════════════
+    if current_code and need_code_gen:
+        yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING,
+                                   "ReAct validating generated code...")
+        try:
+            from app.services.react_engine import ReActEngine, _serialize_steps
+            # Only enforce change ratio for existing projects (source_dir non-empty)
+            _ratio = max_change_ratio if source_dir else 0
+            react = ReActEngine(max_rounds=5, validation_mode=True, max_change_ratio=_ratio)
+            react_result = None
+            async for progress in react.run_code_validate_and_fix_stream(
+                language=language,
+                code_files=current_code,
+                task_description="Validate generated code — fix syntax, import, and runtime errors",
+            ):
+                if "result" in progress:
+                    react_result = progress["result"]
+                else:
+                    pipeline.stages[2].result = {
+                        **(pipeline.stages[2].result or {}),
+                        "files": list(current_code.keys()),
+                        "react_steps": progress["react_steps"],
+                    }
+                    pipeline.stages[2].logs = f"ReAct round {progress['round']}/{5}..."
+                    yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.RUNNING)
+
+            if react_result is None:
+                raise RuntimeError("ReAct stream ended without result")
+
+            if react_result.success:
+                if react_result.final_code and react_result.final_code != current_code:
+                    logger.info("[Stage 3] ReAct fixed code, updating current_code")
+                    current_code = react_result.final_code
+                    for fname, content in current_code.items():
+                        for a in pipeline.code_artifacts:
+                            if a.filename == fname and a.version == 1:
+                                a.content = content
+                    _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
+
+                pipeline.stages[2].result = {
+                    **(pipeline.stages[2].result or {}),
+                    "files": list(current_code.keys()),
+                    "react_steps": _serialize_steps(react_result.steps),
+                    "react_summary": react_result.summary,
+                }
+                pipeline.stages[2].logs = f"Validated: {len(current_code)} files OK"
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
+            else:
+                pipeline.stages[2].result = {
+                    **(pipeline.stages[2].result or {}),
+                    "files": list(current_code.keys()),
+                    "react_steps": _serialize_steps(react_result.steps),
+                    "react_summary": react_result.summary,
+                    "remaining_issues": react_result.remaining_issues,
+                }
+                pipeline.stages[2].logs = f"Validation incomplete after {react_result.rounds_used} rounds"
+                yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED,
+                                           react_result.summary)
+                return
+        except Exception as e:
+            logger.exception(f"[Stage 3] ReAct validation crashed: {e}")
+            pipeline.stages[2].result = {
+                **(pipeline.stages[2].result or {}),
+                "react_error": str(e),
+            }
+            pipeline.stages[2].logs = f"Generated (validation skipped: {e})"
+            yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.SUCCESS)
 
     # --- Stage 4: Case Review ---
     if skip_case_review:

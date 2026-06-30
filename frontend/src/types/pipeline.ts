@@ -43,6 +43,16 @@ export interface CodeArtifact {
   version: number;
 }
 
+/** Single step in a ReAct reasoning trace (from backend ReActStep). */
+export interface ReActStep {
+  round: number;
+  thought: string;
+  action: string;
+  action_input: Record<string, unknown>;
+  observation: string;
+  is_final: boolean;
+}
+
 export interface PipelineState {
   pipeline_id: string;
   diagram_id: string;
