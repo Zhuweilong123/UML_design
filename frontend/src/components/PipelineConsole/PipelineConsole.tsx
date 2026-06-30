@@ -1,5 +1,5 @@
 /**
- * Pipeline Console – real-time display and control of the 7-stage pipeline.
+ * Pipeline Console – real-time display and control of the 6-stage pipeline.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -209,6 +209,7 @@ const PipelineConsole: React.FC = () => {
           message.info('流水线已停止');
           setManualRunning(false);
           setCurrentAction('已停止');
+          if (data.data) setPipeline(data.data);  // sync terminal state
         } else if (data.event === 'error') {
           setWsError(data.error);
           setManualRunning(false);
@@ -321,7 +322,7 @@ const PipelineConsole: React.FC = () => {
     (s) => s.status === StageStatus.SUCCESS || s.status === StageStatus.SKIPPED || s.status === StageStatus.FAILED
   ).length || 0;
 
-  const totalStages = pipeline?.stages.length || 7;
+  const totalStages = pipeline?.stages.length || 6;
 
   return (
     <div className="pipeline-console">
@@ -524,7 +525,7 @@ const PipelineConsole: React.FC = () => {
 
       {!pipeline && (
         <div className="pipeline-empty">
-          <p>点击"启动流水线"开始七阶段自动化流程：</p>
+          <p>点击"启动流水线"开始六阶段自动化流程：</p>
           <ol>
             {Object.entries(STAGE_LABELS).map(([key, label]) => (
               <li key={key}>{label}</li>

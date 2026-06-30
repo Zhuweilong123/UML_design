@@ -12,8 +12,9 @@ import {
   ReloadOutlined, CodeOutlined, PlusOutlined,
   SaveOutlined, FileTextOutlined, FileAddOutlined,
   HistoryOutlined, FolderOpenOutlined, UploadOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
-import { loadTestFile, saveTestFile, generateTestCode, saveTestReview, listTestFiles } from '../../services/api';
+import { loadTestFile, saveTestFile, generateTestCode, saveTestReview, listTestFiles, browseDirectory, type BrowseResult } from '../../services/api';
 import { useUiStore } from '../../stores/uiStore';
 import './TestCaseViewer.css';
 
@@ -42,6 +43,11 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
 
   // Editable cell tracking
   const editedCells = useRef<Set<string>>(new Set());
+
+  // Directory browse state
+  const [browseVisible, setBrowseVisible] = useState(false);
+  const [browseResult, setBrowseResult] = useState<BrowseResult | null>(null);
+  const [browsePath, setBrowsePath] = useState('');
 
   // Load files list on mount
   useEffect(() => {
@@ -97,6 +103,36 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     setCurrentFile('');
     loadFiles();
   };
+
+  // ── Directory browse handlers ──────────────────────
+  const openBrowse = useCallback(async (path?: string) => {
+    try {
+      const result = await browseDirectory(path || '', false);
+      setBrowseResult(result);
+      setBrowsePath(result.current);
+      setBrowseVisible(true);
+    } catch {
+      message.error('加载目录失败');
+    }
+  }, []);
+
+  const handleBrowseDir = useCallback((dirPath: string) => {
+    openBrowse(dirPath);
+  }, [openBrowse]);
+
+  const handleBrowseParent = useCallback(() => {
+    if (browseResult?.parent) {
+      openBrowse(browseResult.parent);
+    }
+  }, [openBrowse, browseResult]);
+
+  const handleSelectDir = useCallback(() => {
+    setCustomDir(browsePath);
+    setBrowseVisible(false);
+    // Auto-load files from selected directory
+    setCurrentFile('');
+    loadFiles(browsePath);
+  }, [browsePath, loadFiles]);
 
   /** Find column index by header name (case-insensitive partial match) */
   const findCol = (headers: string[], keywords: string[]): number => {
@@ -274,16 +310,24 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
       <div className="testcase-header">
         <h3>用例检视</h3>
         <Space wrap>
-          <Input
-            prefix={<FolderOpenOutlined />}
-            value={customDir}
-            onChange={e => setCustomDir(e.target.value)}
-            onPressEnter={handleDirChange}
-            placeholder="输入用例目录路径（留空使用默认）"
-            style={{ width: 300 }}
-            allowClear
-            onClear={handleResetDir}
-          />
+          <Input.Group compact>
+            <Input
+              prefix={<FolderOpenOutlined />}
+              value={customDir}
+              onChange={e => setCustomDir(e.target.value)}
+              onPressEnter={handleDirChange}
+              placeholder="输入用例目录路径（留空使用默认）"
+              style={{ width: 260 }}
+              allowClear
+              onClear={handleResetDir}
+            />
+            <Tooltip title="浏览选择目录">
+              <Button icon={<FolderOpenOutlined />} onClick={() => openBrowse(customDir || undefined)} />
+            </Tooltip>
+            {customDir && (
+              <Button icon={<CloseOutlined />} onClick={handleResetDir} />
+            )}
+          </Input.Group>
           <Button onClick={handleDirChange} size="small">加载</Button>
           <Button onClick={handleResetDir} size="small" disabled={!customDir}>默认</Button>
           <Divider type="vertical" />
@@ -405,6 +449,48 @@ const TestCaseViewer: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
           </div>
         </div>
       )}
+
+      {/* Directory browse modal */}
+      <Modal
+        title="选择用例目录"
+        open={browseVisible}
+        onCancel={() => setBrowseVisible(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setBrowseVisible(false)}>取消</Button>,
+          <Button key="select" type="primary" onClick={handleSelectDir}>选择此目录</Button>,
+        ]}
+        width={550}
+      >
+        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Button size="small" onClick={handleBrowseParent} disabled={!browseResult?.parent}>
+            上级目录
+          </Button>
+          <span style={{ fontSize: 12, color: '#666', wordBreak: 'break-all' }}>
+            {browseResult?.current || ''}
+          </span>
+        </div>
+        <div style={{ maxHeight: 320, overflow: 'auto' }}>
+          {browseResult?.dirs?.map(dir => (
+            <div
+              key={dir.path}
+              onClick={() => handleBrowseDir(dir.path)}
+              style={{ cursor: 'pointer', padding: '4px 8px', borderRadius: 4,
+                       display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <FolderOpenOutlined style={{ color: '#faad14' }} />
+              <span style={{ fontSize: 13 }}>{dir.name}</span>
+            </div>
+          ))}
+          {(!browseResult?.dirs || browseResult.dirs.length === 0) && (
+            <div style={{ color: '#999', fontSize: 12, padding: 8 }}>此目录下无子目录</div>
+          )}
+        </div>
+        {browseResult?.files && browseResult.files.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 11, color: '#888' }}>
+            此目录包含 {browseResult.files.length} 个文件
+          </div>
+        )}
+      </Modal>
 
       {/* Operation log modal */}
       <Modal

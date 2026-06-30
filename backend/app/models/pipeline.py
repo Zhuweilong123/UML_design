@@ -29,9 +29,8 @@ STAGE_LABELS: dict[str, str] = {
     "dev_confirm": "2. 开发确认",
     "code_gen": "3. 代码生成",
     "case_review": "4. 用例检视",
-    "test_gen": "5. 测试用例增量生成",
-    "test_exec": "6. 用例调试执行",
-    "code_optimize": "7. 代码迭代优化",
+    "test_gen": "5. 用例生成与校验",
+    "code_optimize": "6. 测试执行与代码优化",
 }
 
 

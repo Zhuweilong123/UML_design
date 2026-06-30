@@ -51,8 +51,7 @@ app.include_router(llm_router, dependencies=[Depends(require_auth)])
 app.include_router(pipeline_router)  # auth: WS endpoint checks token manually; HTTP routes use Depends
 app.include_router(testhub_router, dependencies=[Depends(require_auth)])
 
-# Static files (uploaded files)
-os.makedirs(settings.upload_dir, exist_ok=True)
+# Ensure required directories exist
 os.makedirs(settings.uml_dir, exist_ok=True)
 
 

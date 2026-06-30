@@ -236,7 +236,7 @@ export async function saveTestReview(req: {
   return data;
 }
 
-// ─── Review ────────────────────────────────────────────
+// ─── Unified Review ─────────────────────────────────────
 
 export async function saveReview(review: {
   action: string;
@@ -245,6 +245,10 @@ export async function saveReview(review: {
   original_name: string;
   optimized_name: string;
   timestamp: string;
+  filename?: string;
+  sheet?: string;
+  case_id?: string;
+  details?: string;
 }): Promise<{ success: boolean; file: string }> {
   const { data } = await api.post('/files/save-review', review);
   return data;

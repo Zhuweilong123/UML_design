@@ -73,8 +73,9 @@ async def export_to_markdown(req: ExportRequest):
 
 @router.post("/upload/excel", dependencies=[Depends(require_auth)])
 async def upload_excel(file: UploadFile = File(...)):
-    """Upload an Excel test case file."""
+    """Upload an Excel test case file — parsed in memory, temp file cleaned up."""
     import pandas as pd
+    import tempfile
     content = await file.read()
 
     # Sanitize filename — strip path components to prevent traversal
@@ -83,19 +84,15 @@ async def upload_excel(file: UploadFile = File(...)):
     if not safe_name or safe_name.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Save uploaded file
-    settings = get_settings()
-    os.makedirs(settings.upload_dir, exist_ok=True)
-    filepath = os.path.join(settings.upload_dir, safe_name)
-    with open(filepath, "wb") as f:
-        f.write(content)
-
-    # Parse Excel
-    xls = pd.ExcelFile(filepath)
-    sheets = {}
-    for sheet_name in xls.sheet_names:
-        df = pd.read_excel(xls, sheet_name=sheet_name)
-        sheets[sheet_name] = df.fillna("").to_dict(orient="records")
+    # Save to temp file, parse, then clean up
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=True) as tmp:
+        tmp.write(content)
+        tmp.flush()
+        xls = pd.ExcelFile(tmp.name)
+        sheets = {}
+        for sheet_name in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet_name)
+            sheets[sheet_name] = df.fillna("").to_dict(orient="records")
 
     return {"filename": file.filename, "sheets": sheets, "sheet_names": xls.sheet_names}
 
@@ -169,39 +166,60 @@ async def browse_directory(path: str = "", safe: bool = True):
     }
 
 
-# ── Review saving ───────────────────────────────────────
+# ── Unified review log ──────────────────────────────────
 
 class ReviewRequest(BaseModel):
-    action: str  # "accept" or "reject"
+    action: str  # "accept", "reject", "case_review", etc.
     comment: str = ""
     requirements: str = ""
     original_name: str = ""
     optimized_name: str = ""
     timestamp: str = ""
+    # Case review fields (optional)
+    filename: str = ""
+    sheet: str = ""
+    case_id: str = ""
+    details: str = ""
+
 
 @router.post("/save-review", dependencies=[Depends(require_auth)])
 async def save_review(req: ReviewRequest):
-    """Save optimization review to dev_review.txt."""
+    """Save review record to dev_review.txt (unified UML + case review log)."""
     settings = get_settings()
     review_file = os.path.join(settings.uml_dir, "..", "dev_review.txt")
     review_file = os.path.abspath(review_file)
 
     ts = req.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    action_label = "接受" if req.action == "accept" else "拒绝"
 
-    entry = f"""============================================================
-[{ts}] 评审结果: {action_label}
+    if req.action in ("accept", "reject"):
+        action_label = "接受" if req.action == "accept" else "拒绝"
+        entry = f"""============================================================
+[{ts}] UML评审结果: {action_label}
 优化需求: {req.requirements if req.requirements else '(无)'}
 原始版本: {req.original_name}
 优化版本: {req.optimized_name}
 评审意见: {req.comment if req.comment else '(无)'}
 ============================================================
 """
+    else:
+        # Case review operation log
+        entry = f"[{ts}] {req.action}"
+        if req.filename:
+            entry += f" | File: {req.filename}"
+        if req.sheet:
+            entry += f" | Sheet: {req.sheet}"
+        if req.case_id:
+            entry += f" | Case: {req.case_id}"
+        if req.comment:
+            entry += f"\n  Comment: {req.comment}"
+        if req.details:
+            entry += f"\n  Details: {req.details}"
+        entry += "\n"
 
     with open(review_file, "a", encoding="utf-8") as f:
         f.write(entry)
 
-    return {"success": True, "file": review_file}
+    return {"success": True, "file": review_file.replace("\\", "/")}
 
 
 # ── Generated code management ───────────────────────────

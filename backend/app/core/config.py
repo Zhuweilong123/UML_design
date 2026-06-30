@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     debug: bool = True
 
     # File storage
-    upload_dir: str = "./uploads"
     uml_dir: str = "./uml_files"
 
     # CORS
