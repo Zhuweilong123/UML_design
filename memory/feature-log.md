@@ -477,3 +477,28 @@ metadata:
   - SeqEditor/CompEditor 读取 diagram 网格参数 + grid sync effect
   - 工具栏网格开关/设置对三种图统一生效
 - **关键文件**: `frontend/src/components/Canvas/SeqEditor.tsx`, `CompEditor.tsx`
+
+---
+
+## F43 - 流水线 UML 优化 → 全局优化
+
+- **描述**:
+  - 流水线 Stage 1 从 `optimize_uml`（单图）改为 `optimize_project`（三图交叉校验）
+  - DiffViewer 支持图类型切换标签（类图/时序图/组件图），切换查看 diff 和画布对比
+  - 一致性报告在 diff 面板中展示
+  - 优化弹窗改为动态展示项目所有图类型及统计
+  - 接受操作将三种优化图分别写入对应 project diagram
+  - 拒绝重优化调用全局 API
+- **关键文件**: `backend/app/services/pipeline_service.py`, `frontend/src/stores/uiStore.ts`, `frontend/src/components/DiffViewer/DiffViewer.tsx`, `frontend/src/components/DiffViewer/DiffViewer.css`, `frontend/src/components/PipelineConsole/PipelineConsole.tsx`, `frontend/src/App.css`
+
+---
+
+## F44 - 全局优化 DiffViewer 滚动与类型安全
+
+- **描述**:
+  - DiffViewer tabpane 改为 `overflow-y: auto` 支持长内容滚动
+  - diff-editor-wrapper 固定 350px 高度，评审区始终可见
+  - 修复 `getState().diagram` 取激活图 → 按类型查找的安全问题
+  - 优化结果合并原始元数据保留 `diagram_type`
+  - 切标签时显式恢复原始版，防 project 污染
+- **关键文件**: `frontend/src/components/DiffViewer/DiffViewer.css`, `frontend/src/components/DiffViewer/DiffViewer.tsx`, `frontend/src/components/PipelineConsole/PipelineConsole.tsx`, `frontend/src/App.css`

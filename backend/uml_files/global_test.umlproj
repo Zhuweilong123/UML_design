@@ -4,98 +4,51 @@
   "diagrams": [
     {
       "version": "1.0",
-      "name": "DataCollaborationDesign",
+      "name": "Untitled",
       "diagram_type": "class",
       "classes": [
         {
-          "id": "class_datasendmodule",
-          "name": "DataSendModule",
+          "id": "class_1782831252303_j96sry",
+          "name": "OrderController",
           "stereotype": "class",
-          "attributes": [
-            {
-              "name": "dataBuffer",
-              "type": "string",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "targetEndpoint",
-              "type": "string",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
+          "attributes": [],
           "methods": [
             {
-              "name": "sendData",
-              "return_type": "bool",
-              "params": "data: string",
+              "name": "createOrder",
+              "return_type": "void",
+              "params": "itemId: string, quantity: int",
               "visibility": "+",
-              "is_static": false,
-              "is_abstract": false
-            },
-            {
-              "name": "prepareData",
-              "return_type": "string",
-              "params": "rawData: string",
-              "visibility": "-",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
-            "x": -130.0,
+            "x": 50.0,
             "y": 50.0
           },
           "size": {
             "width": 200.0,
             "height": 150.0
           },
-          "note": "负责数据的发送和初步封装",
-          "provided_interfaces": [
-            "IDataSender"
-          ],
-          "required_interfaces": []
+          "note": "接收HTTP请求，参数校验，响应封装",
+          "provided_interfaces": [],
+          "required_interfaces": [
+            "IOrderProcessing"
+          ]
         },
         {
-          "id": "class_dataprocessmodule",
-          "name": "DataProcessModule",
-          "stereotype": "class",
-          "attributes": [
-            {
-              "name": "processingRules",
-              "type": "map<string, string>",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            }
-          ],
+          "id": "class_1782831253259_5p1gqh",
+          "name": "IOrderProcessing",
+          "stereotype": "interface",
+          "attributes": [],
           "methods": [
             {
-              "name": "processData",
-              "return_type": "string",
-              "params": "data: string",
+              "name": "processOrder",
+              "return_type": "void",
+              "params": "orderData: object",
               "visibility": "+",
               "is_static": false,
-              "is_abstract": false
-            },
-            {
-              "name": "validateData",
-              "return_type": "bool",
-              "params": "data: string",
-              "visibility": "-",
-              "is_static": false,
-              "is_abstract": false
-            },
-            {
-              "name": "transformData",
-              "return_type": "string",
-              "params": "data: string",
-              "visibility": "-",
-              "is_static": false,
-              "is_abstract": false
+              "is_abstract": true
             }
           ],
           "position": {
@@ -106,89 +59,277 @@
             "width": 200.0,
             "height": 150.0
           },
-          "note": "负责数据的处理、验证和转换",
+          "note": "订单处理接口",
           "provided_interfaces": [
-            "IDataProcessor"
+            "IOrderProcessing"
           ],
-          "required_interfaces": [
-            "IDataSender"
-          ]
+          "required_interfaces": []
         },
         {
-          "id": "class_datasavemodule",
-          "name": "DataSaveModule",
+          "id": "class_1782831254490_cicjf4",
+          "name": "OrderServiceImpl",
           "stereotype": "class",
-          "attributes": [
-            {
-              "name": "storagePath",
-              "type": "string",
-              "visibility": "-",
-              "default_value": null,
-              "is_static": false
-            },
-            {
-              "name": "maxRetries",
-              "type": "int",
-              "visibility": "-",
-              "default_value": "3",
-              "is_static": false
-            }
-          ],
+          "attributes": [],
           "methods": [
             {
-              "name": "saveData",
-              "return_type": "bool",
-              "params": "data: string",
+              "name": "processOrder",
+              "return_type": "void",
+              "params": "orderData: object",
               "visibility": "+",
               "is_static": false,
               "is_abstract": false
             },
             {
-              "name": "archiveData",
-              "return_type": "void",
-              "params": "dataId: string",
+              "name": "generateOrderId",
+              "return_type": "string",
+              "params": "",
               "visibility": "-",
               "is_static": false,
               "is_abstract": false
             }
           ],
           "position": {
-            "x": 730.0,
+            "x": 350.0,
+            "y": 250.0
+          },
+          "size": {
+            "width": 200.0,
+            "height": 150.0
+          },
+          "note": "核心业务逻辑：编排下单流程",
+          "provided_interfaces": [],
+          "required_interfaces": [
+            "IInventoryData"
+          ]
+        },
+        {
+          "id": "class_1782831255891_j7u3sg",
+          "name": "Order",
+          "stereotype": "class",
+          "attributes": [
+            {
+              "name": "orderId",
+              "type": "string",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            },
+            {
+              "name": "itemId",
+              "type": "string",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            },
+            {
+              "name": "quantity",
+              "type": "int",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            },
+            {
+              "name": "createTime",
+              "type": "DateTime",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            }
+          ],
+          "methods": [],
+          "position": {
+            "x": 350.0,
+            "y": 450.0
+          },
+          "size": {
+            "width": 200.0,
+            "height": 150.0
+          },
+          "note": "订单实体",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "class_1782831257108_xgq60s",
+          "name": "IInventoryData",
+          "stereotype": "interface",
+          "attributes": [],
+          "methods": [
+            {
+              "name": "checkStock",
+              "return_type": "int",
+              "params": "itemId: string",
+              "visibility": "+",
+              "is_static": false,
+              "is_abstract": true
+            },
+            {
+              "name": "deductStock",
+              "return_type": "bool",
+              "params": "itemId: string, qty: int",
+              "visibility": "+",
+              "is_static": false,
+              "is_abstract": true
+            }
+          ],
+          "position": {
+            "x": 650.0,
             "y": 50.0
           },
           "size": {
             "width": 200.0,
             "height": 150.0
           },
-          "note": "负责数据的持久化存储和归档",
+          "note": "库存数据接口",
           "provided_interfaces": [
-            "IDataSaver"
+            "IInventoryData"
           ],
-          "required_interfaces": [
-            "IDataProcessor"
-          ]
+          "required_interfaces": []
+        },
+        {
+          "id": "class_1782831258706_811c9k",
+          "name": "InventoryDAOImpl",
+          "stereotype": "class",
+          "attributes": [],
+          "methods": [
+            {
+              "name": "checkStock",
+              "return_type": "int",
+              "params": "itemId: string",
+              "visibility": "+",
+              "is_static": false,
+              "is_abstract": false
+            },
+            {
+              "name": "deductStock",
+              "return_type": "bool",
+              "params": "itemId: string, qty: int",
+              "visibility": "+",
+              "is_static": false,
+              "is_abstract": false
+            },
+            {
+              "name": "connectDB",
+              "return_type": "void",
+              "params": "",
+              "visibility": "-",
+              "is_static": false,
+              "is_abstract": false
+            }
+          ],
+          "position": {
+            "x": 650.0,
+            "y": 250.0
+          },
+          "size": {
+            "width": 200.0,
+            "height": 150.0
+          },
+          "note": "库存数据访问实现",
+          "provided_interfaces": [],
+          "required_interfaces": []
+        },
+        {
+          "id": "class_1782831259813_ce103v",
+          "name": "InventoryItem",
+          "stereotype": "class",
+          "attributes": [
+            {
+              "name": "itemId",
+              "type": "string",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            },
+            {
+              "name": "stock",
+              "type": "int",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            },
+            {
+              "name": "location",
+              "type": "string",
+              "visibility": "+",
+              "default_value": null,
+              "is_static": false
+            }
+          ],
+          "methods": [],
+          "position": {
+            "x": 650.0,
+            "y": 450.0
+          },
+          "size": {
+            "width": 200.0,
+            "height": 150.0
+          },
+          "note": "库存实体",
+          "provided_interfaces": [],
+          "required_interfaces": []
         }
       ],
       "relations": [
         {
-          "id": "rel_assoc_send_process",
-          "source": "class_datasendmodule",
-          "target": "class_dataprocessmodule",
-          "type": "association",
-          "multiplicity_source": "1",
-          "multiplicity_target": "1",
-          "role_name": "processor",
-          "note": "DataSendModule 将数据发送给 DataProcessModule 处理"
+          "id": "rel_1782831260369_71dhsc",
+          "source": "class_1782831252303_j96sry",
+          "target": "class_1782831253259_5p1gqh",
+          "type": "dependency",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": "OrderController依赖IOrderProcessing接口"
         },
         {
-          "id": "rel_assoc_process_save",
-          "source": "class_dataprocessmodule",
-          "target": "class_datasavemodule",
+          "id": "rel_1782831260824_8cahcg",
+          "source": "class_1782831254490_cicjf4",
+          "target": "class_1782831253259_5p1gqh",
+          "type": "realization",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": "OrderServiceImpl实现IOrderProcessing"
+        },
+        {
+          "id": "rel_1782831261237_qqpnno",
+          "source": "class_1782831254490_cicjf4",
+          "target": "class_1782831257108_xgq60s",
+          "type": "dependency",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": "OrderServiceImpl依赖IInventoryData"
+        },
+        {
+          "id": "rel_1782831261728_1l5zna",
+          "source": "class_1782831254490_cicjf4",
+          "target": "class_1782831255891_j7u3sg",
           "type": "association",
           "multiplicity_source": "1",
           "multiplicity_target": "1",
-          "role_name": "saver",
-          "note": "DataProcessModule 将处理后的数据传递给 DataSaveModule 存储"
+          "role_name": "creates",
+          "note": "OrderServiceImpl创建Order实体"
+        },
+        {
+          "id": "rel_1782831262174_110sc8",
+          "source": "class_1782831258706_811c9k",
+          "target": "class_1782831257108_xgq60s",
+          "type": "realization",
+          "multiplicity_source": "",
+          "multiplicity_target": "",
+          "role_name": "",
+          "note": "InventoryDAOImpl实现IInventoryData"
+        },
+        {
+          "id": "rel_1782831262837_oa24e2",
+          "source": "class_1782831258706_811c9k",
+          "target": "class_1782831259813_ce103v",
+          "type": "association",
+          "multiplicity_source": "1",
+          "multiplicity_target": "1",
+          "role_name": "queries/updates",
+          "note": "InventoryDAOImpl查询和更新InventoryItem"
         }
       ],
       "lifelines": [],
@@ -213,145 +354,135 @@
       "relations": [],
       "lifelines": [
         {
-          "id": "life_external",
-          "name": "ExternalSystem",
+          "id": "life_1782831263167_ysq0zl",
+          "name": "User",
           "class_ref": "",
           "x": 100.0,
           "activations": []
         },
         {
-          "id": "life_send",
-          "name": "DataSendModule",
-          "class_ref": "class_datasendmodule",
+          "id": "life_1782831263424_55u5gw",
+          "name": "OrderController",
+          "class_ref": "class_controller",
           "x": 300.0,
           "activations": []
         },
         {
-          "id": "life_process",
-          "name": "DataProcessModule",
-          "class_ref": "class_dataprocessmodule",
+          "id": "life_1782831263709_jmvwne",
+          "name": "OrderServiceImpl",
+          "class_ref": "class_orderservice",
           "x": 500.0,
           "activations": []
         },
         {
-          "id": "life_save",
-          "name": "DataSaveModule",
-          "class_ref": "class_datasavemodule",
+          "id": "life_1782831263954_u7sclu",
+          "name": "InventoryDAOImpl",
+          "class_ref": "class_inventorydao",
           "x": 700.0,
           "activations": []
         }
       ],
       "messages": [
         {
-          "id": "msg_1",
-          "from_lifeline": "life_external",
-          "to_lifeline": "life_send",
-          "label": "submitData(rawData)",
+          "id": "msg_1782831264506_2jfsvr",
+          "from_lifeline": "life_1782831263167_ysq0zl",
+          "to_lifeline": "life_1782831263424_55u5gw",
+          "label": "createOrder(itemId, quantity)",
           "type": "sync",
           "order": 1,
-          "y": 170.0,
-          "note": "外部系统提交原始数据到 DataSendModule"
+          "y": 190.0,
+          "note": "用户发起下单请求，包含商品ID和购买数量"
         },
         {
-          "id": "msg_2",
-          "from_lifeline": "life_send",
-          "to_lifeline": "life_send",
-          "label": "prepareData(rawData)",
-          "type": "self",
+          "id": "msg_1782831265151_asvh6c",
+          "from_lifeline": "life_1782831263424_55u5gw",
+          "to_lifeline": "life_1782831263709_jmvwne",
+          "label": "processOrder(orderData)",
+          "type": "sync",
           "order": 2,
-          "y": 210.0,
-          "note": "DataSendModule 内部封装和准备数据"
+          "y": 230.0,
+          "note": "OrderController将参数封装为订单数据，委派业务层处理"
         },
         {
-          "id": "msg_3",
-          "from_lifeline": "life_send",
-          "to_lifeline": "life_process",
-          "label": "sendData(processedData)",
+          "id": "msg_1782831265725_u5xez2",
+          "from_lifeline": "life_1782831263709_jmvwne",
+          "to_lifeline": "life_1782831263954_u7sclu",
+          "label": "checkStock(itemId)",
           "type": "sync",
           "order": 3,
           "y": 270.0,
-          "note": "将封装后的数据发送到 DataProcessModule 进行处理"
+          "note": "调用库存服务查询当前库存数量"
         },
         {
-          "id": "msg_4",
-          "from_lifeline": "life_process",
-          "to_lifeline": "life_process",
-          "label": "validateData(data)",
-          "type": "self",
+          "id": "msg_1782831266223_lnsppt",
+          "from_lifeline": "life_1782831263954_u7sclu",
+          "to_lifeline": "life_1782831263709_jmvwne",
+          "label": "return stockCount",
+          "type": "return",
           "order": 4,
-          "y": 330.0,
-          "note": "DataProcessModule 验证数据的完整性和正确性"
+          "y": 310.0,
+          "note": "返回当前库存数量"
         },
         {
-          "id": "msg_5",
-          "from_lifeline": "life_process",
-          "to_lifeline": "life_process",
-          "label": "transformData(data)",
-          "type": "self",
-          "order": 5,
-          "y": 290.0,
-          "note": "根据规则转换数据格式"
-        },
-        {
-          "id": "msg_6",
-          "from_lifeline": "life_process",
-          "to_lifeline": "life_save",
-          "label": "saveData(transformedData)",
+          "id": "msg_1782831266710_8rsbpl",
+          "from_lifeline": "life_1782831263709_jmvwne",
+          "to_lifeline": "life_1782831263954_u7sclu",
+          "label": "deductStock(itemId, qty)",
           "type": "sync",
+          "order": 5,
+          "y": 350.0,
+          "note": "库存充足，请求扣减库存"
+        },
+        {
+          "id": "msg_1782831267215_88wrfa",
+          "from_lifeline": "life_1782831263954_u7sclu",
+          "to_lifeline": "life_1782831263709_jmvwne",
+          "label": "return success",
+          "type": "return",
           "order": 6,
           "y": 390.0,
-          "note": "将处理完成的数据发送到 DataSaveModule 进行持久化存储"
+          "note": "库存扣减成功确认"
         },
         {
-          "id": "msg_7",
-          "from_lifeline": "life_save",
-          "to_lifeline": "life_save",
-          "label": "archiveData(dataId)",
+          "id": "msg_1782831267819_fah0qg",
+          "from_lifeline": "life_1782831263709_jmvwne",
+          "to_lifeline": "life_1782831263709_jmvwne",
+          "label": "generateOrderId()",
           "type": "self",
           "order": 7,
           "y": 430.0,
-          "note": "DataSaveModule 内部归档存储的数据"
+          "note": "生成唯一订单号，实例化Order对象"
         },
         {
-          "id": "msg_8",
-          "from_lifeline": "life_save",
-          "to_lifeline": "life_process",
-          "label": "return saveResult",
+          "id": "msg_1782831268320_4it4vz",
+          "from_lifeline": "life_1782831263709_jmvwne",
+          "to_lifeline": "life_1782831263424_55u5gw",
+          "label": "return success + orderId",
           "type": "return",
           "order": 8,
-          "y": 490.0,
-          "note": "返回存储结果（成功/失败）"
+          "y": 470.0,
+          "note": "返回处理成功结果及订单号"
         },
         {
-          "id": "msg_9",
-          "from_lifeline": "life_process",
-          "to_lifeline": "life_send",
-          "label": "return processResult",
+          "id": "msg_1782831268844_1pwmk5",
+          "from_lifeline": "life_1782831263424_55u5gw",
+          "to_lifeline": "life_1782831263167_ysq0zl",
+          "label": "return order success",
           "type": "return",
           "order": 9,
-          "y": 530.0,
-          "note": "返回处理结果给 DataSendModule"
-        },
-        {
-          "id": "msg_10",
-          "from_lifeline": "life_send",
-          "to_lifeline": "life_external",
-          "label": "return finalResult",
-          "type": "return",
-          "order": 10,
-          "y": 550.0,
-          "note": "返回最终处理结果给外部系统"
+          "y": 510.0,
+          "note": "向用户返回下单成功响应"
         }
       ],
       "fragments": [
         {
-          "id": "frag_1782573953973_m0wc62",
-          "type": "loop",
+          "id": "frag_1782831269334_em3t4b",
+          "type": "alt",
           "label": "",
-          "x": 260.0,
-          "width": 640.0,
-          "y_start": 200.0,
-          "y_end": 400.0000000000009
+          "x": 460.0,
+          "width": 420.0,
+          "y_start": 240.00000000000034,
+          "y_end": 460.00000000000034
         }
       ],
       "components": [],
@@ -376,60 +507,58 @@
       "fragments": [],
       "components": [
         {
-          "id": "comp_datasend",
-          "name": "DataSendModule",
+          "id": "comp_1782831269883_p3eh1z",
+          "name": "Web前端组件",
           "x": 50.0,
           "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
-          "provided_interfaces": [
-            "IDataSender"
-          ],
-          "required_interfaces": []
+          "provided_interfaces": [],
+          "required_interfaces": [
+            "IOrderProcessing"
+          ]
         },
         {
-          "id": "comp_dataprocess",
-          "name": "DataProcessModule",
+          "id": "comp_1782831270303_votx0s",
+          "name": "订单业务组件",
           "x": 320.0,
           "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "IDataProcessor"
+            "IOrderProcessing"
           ],
           "required_interfaces": [
-            "IDataSender"
+            "IInventoryData"
           ]
         },
         {
-          "id": "comp_datasave",
-          "name": "DataSaveModule",
+          "id": "comp_1782831270757_afpt1n",
+          "name": "库存仓储组件",
           "x": 590.0,
           "y": 50.0,
           "width": 200.0,
           "height": 160.0,
           "parent_id": "",
           "provided_interfaces": [
-            "IDataSaver"
+            "IInventoryData"
           ],
-          "required_interfaces": [
-            "IDataProcessor"
-          ]
+          "required_interfaces": []
         }
       ],
       "comp_relations": [
         {
-          "id": "crel_send_process",
-          "source": "comp_datasend",
-          "target": "comp_dataprocess",
+          "id": "crel_1782831271037_85sveq",
+          "source": "comp_1782831269883_p3eh1z",
+          "target": "comp_1782831270303_votx0s",
           "type": "dependency"
         },
         {
-          "id": "crel_process_save",
-          "source": "comp_dataprocess",
-          "target": "comp_datasave",
+          "id": "crel_1782831271239_aeeyuz",
+          "source": "comp_1782831270303_votx0s",
+          "target": "comp_1782831270757_afpt1n",
           "type": "dependency"
         }
       ],

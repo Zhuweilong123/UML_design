@@ -2,7 +2,7 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .diff-header {
@@ -43,9 +43,8 @@
 }
 
 .diff-editor-wrapper {
-  flex: 1;
-  min-height: 150px;
-  overflow: hidden;
+  height: 350px;
+  flex-shrink: 0;
 }
 
 .diff-review {

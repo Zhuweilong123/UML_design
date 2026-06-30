@@ -82,7 +82,8 @@ html, body, #root {
 
 .right-panel-tabs .ant-tabs-tabpane {
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .right-panel-tabs .ant-tabs-nav {

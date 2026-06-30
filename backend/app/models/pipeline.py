@@ -1,4 +1,4 @@
-"""Pipeline models – 7-stage automation pipeline."""
+"""Pipeline models – 6-stage automation pipeline."""
 
 from __future__ import annotations
 from pydantic import BaseModel, Field
