@@ -15,7 +15,16 @@ class Settings(BaseSettings):
         description="DeepSeek API key (required, set in .env file)",
     )
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+
+    # Default model — also used as the "pro" tier (powerful, expensive)
+    # Override via DEEPSEEK_MODEL in .env
+    deepseek_model: str = "deepseek-v4-pro"
+
+    # Lightweight / fast model (cheap, suitable for simple tasks)
+    deepseek_model_flash: str = "deepseek-v4-flash"
+
+    # Sub-agent model — used by tool-calling sub-agents (ReAct, pipeline stages, etc.)
+    sub_agent_model: str = "deepseek-v4-flash"
 
     @field_validator("deepseek_api_key")
     @classmethod
