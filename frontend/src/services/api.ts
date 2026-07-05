@@ -32,8 +32,8 @@ export async function saveDiagram(diagram: UmlDiagram, filename?: string): Promi
   return data;
 }
 
-export async function openDiagram(filepath: string): Promise<UmlDiagram> {
-  const { data } = await api.get('/files/open', { params: { filepath } });
+export async function openDiagram(filepath: string, safe = true): Promise<UmlDiagram> {
+  const { data } = await api.get('/files/open', { params: { filepath, safe } });
   return data.diagram;
 }
 
@@ -276,8 +276,8 @@ export async function saveProject(project: Project, filename?: string): Promise<
   return data;
 }
 
-export async function openProject(filepath: string): Promise<Project> {
-  const { data } = await api.get('/files/open-project', { params: { filepath } });
+export async function openProject(filepath: string, safe = true): Promise<Project> {
+  const { data } = await api.get('/files/open-project', { params: { filepath, safe } });
   return data.project;
 }
 

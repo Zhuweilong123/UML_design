@@ -3,18 +3,16 @@ frontend/node_modules/
 frontend/dist/
 
 # Python
-backend/__pycache__/
-backend/app/__pycache__/
-backend/app/api/__pycache__/
-backend/app/core/__pycache__/
-backend/app/models/__pycache__/
-backend/app/services/__pycache__/
+__pycache__/
 *.pyc
 *.pyo
 
 # IDE
 .vscode/
 .idea/
+
+# Claude Code (local config, per-developer)
+.claude/settings.local.json
 
 # OS
 .DS_Store
@@ -25,11 +23,14 @@ backend/.env
 
 # Logs
 *.log
-/tmp/
 
-# Cache
+# Temp files (not checked in)
 /tmp/
-*.log
 
 # Generated code (large, regenerated on each pipeline run)
 /generated/
+
+# Backend generated temp files (not checked in)
+/uml_designer/
+/temp/
+

@@ -18,10 +18,11 @@ except ImportError:
 router = APIRouter(prefix="/api/testhub", tags=["testhub"])
 
 settings = get_settings()
-TESTHUB_DIR = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "testHub"))
+TESTHUB_DIR = os.path.abspath(os.path.join(settings.uml_dir, "..", "testHub"))
 
 
 def _get_testhub_dir(dir_override: str | None = None):
+    """Resolve directory. Falls back to temp/testHub if no custom dir specified."""
     if dir_override:
         d = os.path.abspath(dir_override)
     else:

@@ -2,7 +2,7 @@
  * Top Toolbar – file operations, LLM actions, view controls.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Button, Select, Tooltip, Dropdown, Modal, List, message,
   Divider, Input, Form, Slider, Checkbox,
@@ -67,6 +67,28 @@ const Toolbar: React.FC = () => {
   const [fileList, setFileList] = useState<Array<{
     name: string; path: string; size: number; modified: string;
   }>>([]);
+
+  // ── Path input for open dialog ──────────────────────
+  const [pathInput, setPathInput] = useState('');
+
+  // ── Quick-access paths ──────────────────────────────
+  const userProfile = (() => {
+    // Try to detect home directory from common env patterns
+    // Vite exposes env vars via import.meta.env; also try USERPROFILE (Windows)
+    const env = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
+    const up = env.VITE_USERPROFILE || '';
+    if (up) return up;
+    // Fallback: try common drives for Windows
+    return 'C:/Users';
+  })();
+
+  const QUICK_PATHS = [
+    { label: '📂 桌面', path: `${userProfile}/Desktop` },
+    { label: '📂 文档', path: `${userProfile}/Documents` },
+    { label: '🏠 用户', path: userProfile },
+    { label: '💾 C盘', path: 'C:/' },
+    { label: '💾 D盘', path: 'D:/' },
+  ];
 
   // ── Save As dialog ──────────────────────────────────
   const [saveAsVisible, setSaveAsVisible] = useState(false);
@@ -336,38 +358,47 @@ const Toolbar: React.FC = () => {
 
   const [browseData, setBrowseData] = useState<BrowseResult | null>(null);
   const [currentBrowsePath, setCurrentBrowsePath] = useState('');
+  const browseUnsafe = useRef(false);  // track whether we're browsing outside project
 
-  const handleOpen = async (path?: string) => {
+  const handleOpen = async (path?: string, forceUnsafe = false) => {
     setFileDialogVisible(true);
     try {
-      const result = await browseDirectory(path || currentBrowsePath || '');
+      const safe = !forceUnsafe && !browseUnsafe.current;
+      const result = await browseDirectory(path || currentBrowsePath || '', safe);
       setBrowseData(result);
       setCurrentBrowsePath(result.current);
+      setPathInput(result.current);
     } catch {
       message.error('加载文件列表失败');
     }
   };
 
+  const handleNavigateTo = (targetPath: string) => {
+    browseUnsafe.current = true;
+    setPathInput(targetPath);
+    handleOpen(targetPath, true);
+  };
+
   const handleBrowseDir = (dirPath: string) => {
-    handleOpen(dirPath);
+    handleOpen(dirPath, browseUnsafe.current);
   };
 
   const handleBrowseParent = () => {
     if (browseData?.parent) {
-      handleOpen(browseData.parent);
+      handleOpen(browseData.parent, browseUnsafe.current);
     }
   };
 
   const handleOpenFile = async (path: string, isProject: boolean) => {
     try {
       if (isProject) {
-        const proj = await openProject(path);
+        const proj = await openProject(path, !browseUnsafe.current);
         setProject(proj);
         setCurrentFilepath(path);
         setFileDialogVisible(false);
         message.success(`项目已打开: ${proj.name} (${proj.diagrams.length} 张图)`);
       } else {
-        const d = await openDiagram(path);
+        const d = await openDiagram(path, !browseUnsafe.current);
         setDiagram(d);
         setCurrentFilepath(path);
         setFileDialogVisible(false);
@@ -677,19 +708,53 @@ const Toolbar: React.FC = () => {
       <Modal
         title="打开 UML 文件"
         open={fileDialogVisible}
-        onCancel={() => setFileDialogVisible(false)}
+        onCancel={() => { setFileDialogVisible(false); browseUnsafe.current = false; }}
         footer={null}
-        width={600}
+        width={650}
       >
         {/* Breadcrumb / navigation */}
-        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Button size="small" onClick={handleBrowseParent}
             disabled={!browseData?.parent}>
             上级目录
           </Button>
-          <span style={{ fontSize: 12, color: '#666', wordBreak: 'break-all' }}>
+          <span style={{ fontSize: 12, color: '#666', wordBreak: 'break-all', flex: 1 }}>
             {browseData?.current || ''}
           </span>
+        </div>
+
+        {/* Path input + Go button */}
+        <div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
+          <Input
+            size="small"
+            value={pathInput}
+            onChange={(e) => setPathInput(e.target.value)}
+            onPressEnter={() => handleNavigateTo(pathInput)}
+            placeholder="输入或粘贴目录路径，按回车跳转..."
+            style={{ flex: 1 }}
+            allowClear
+          />
+          <Button
+            size="small"
+            type="primary"
+            onClick={() => handleNavigateTo(pathInput)}
+          >
+            跳转
+          </Button>
+        </div>
+
+        {/* Quick-access paths */}
+        <div style={{ marginBottom: 10, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {QUICK_PATHS.map((qp) => (
+            <Button
+              key={qp.path}
+              size="small"
+              onClick={() => handleNavigateTo(qp.path)}
+              style={{ fontSize: 11 }}
+            >
+              {qp.label}
+            </Button>
+          ))}
         </div>
 
         <List

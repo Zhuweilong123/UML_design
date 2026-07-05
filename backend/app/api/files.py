@@ -42,18 +42,20 @@ async def save_file(diagram: UmlDiagram, filename: str = ""):
 
 
 @router.get("/open")
-async def open_file(filepath: str):
-    """Open a saved UML diagram file. Only allows .uml files within the project."""
-    # Validate path stays within project
+async def open_file(filepath: str, safe: bool = True):
+    """Open a saved UML diagram file. Pass safe=false to allow any path on disk."""
+    path_resolver = safe_path if safe else resolve_path
     try:
-        safe = safe_path(filepath)
+        resolved = path_resolver(filepath)
     except HTTPException:
-        raise HTTPException(status_code=403, detail="Access denied")
-    if not safe.endswith(".uml"):
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not resolved.endswith(".uml"):
         raise HTTPException(status_code=400, detail="Only .uml files can be opened")
-    if not os.path.exists(safe):
+    if not os.path.exists(resolved):
         raise HTTPException(status_code=404, detail="File not found")
-    diagram = load_diagram(safe)
+    diagram = load_diagram(resolved)
     return {"diagram": diagram.model_dump()}
 
 
@@ -337,16 +339,20 @@ async def save_project_endpoint(project: Project, filename: str = ""):
 
 
 @router.get("/open-project")
-async def open_project(filepath: str):
-    """Open a .umlproj (or legacy .uml) file as a Project."""
+async def open_project(filepath: str, safe: bool = True):
+    """Open a .umlproj (or legacy .uml) file as a Project.
+    Pass safe=false to allow any path on disk."""
+    path_resolver = safe_path if safe else resolve_path
     try:
-        safe_path(filepath)  # validate path
+        resolved = path_resolver(filepath)
     except HTTPException:
         raise HTTPException(status_code=403, detail="Access denied")
-    if not os.path.exists(filepath):
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not os.path.exists(resolved):
         raise HTTPException(status_code=404, detail="File not found")
     try:
-        project = load_project(filepath)
+        project = load_project(resolved)
         logger.info(f"[API] Project opened: {project.name} ({len(project.diagrams)} diagrams)")
         return {"project": project.model_dump()}
     except Exception as e:

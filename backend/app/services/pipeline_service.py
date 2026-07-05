@@ -81,7 +81,7 @@ Pipeline: {pipeline_id}
 def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: str):
     """Save detailed pipeline run log as a markdown file in pipeline_log/ directory."""
     settings = get_settings()
-    log_dir = os.path.abspath(os.path.join(settings.uml_dir, "..", "..", "pipeline_log"))
+    log_dir = os.path.abspath(os.path.join(settings.uml_dir, "..", "pipeline_log"))
     os.makedirs(log_dir, exist_ok=True)
 
     from datetime import datetime
