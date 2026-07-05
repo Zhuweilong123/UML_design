@@ -11,6 +11,9 @@ __pycache__/
 .vscode/
 .idea/
 
+# Claude Code (local config, per-developer)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
