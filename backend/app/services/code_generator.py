@@ -325,7 +325,7 @@ Only output the JSON object, no other text.
     # Save prompt to pipeline_log for diagnostics
     try:
         from pathlib import Path as _Path
-        _log_dir = _Path(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_dir = _Path(__file__).resolve().parent.parent.parent.parent / "temp" / "pipeline_log"
         _log_dir.mkdir(exist_ok=True)
         _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
         _prompt_file = _log_dir / f"llm_prompt_{_ts}.md"
@@ -515,7 +515,7 @@ async def optimize_project(
     # Save prompt + response for diagnostics
     try:
         from pathlib import Path as _P3
-        _log_d = _P3(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_d = _P3(__file__).resolve().parent.parent.parent.parent / "temp" / "pipeline_log"
         _log_d.mkdir(exist_ok=True)
         _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
         _f = _log_d / f"llm_global_optimize_{_ts}.md"
@@ -577,7 +577,7 @@ async def optimize_project_stream(
     # Save prompt for diagnostics
     try:
         from pathlib import Path as _PP2
-        _ld = _PP2(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _ld = _PP2(__file__).resolve().parent.parent.parent.parent / "temp" / "pipeline_log"
         _ld.mkdir(exist_ok=True)
         _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
         _lf = _ld / f"llm_stream_optimize_{_ts}.md"
@@ -896,7 +896,7 @@ Only output the JSON object, no other text.
     # Save prompt for diagnostics
     try:
         from pathlib import Path as _P
-        _log_d = _P(__file__).resolve().parent.parent.parent.parent / "pipeline_log"
+        _log_d = _P(__file__).resolve().parent.parent.parent.parent / "temp" / "pipeline_log"
         _log_d.mkdir(exist_ok=True)
         _ts = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
         _f = _log_d / f"llm_optimize_{_ts}.md"

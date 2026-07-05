@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     debug: bool = True
 
     # File storage
-    uml_dir: str = "./uml_files"
+    uml_dir: str = "../temp/uml_files"
 
     # CORS
     cors_origins: list[str] = [
