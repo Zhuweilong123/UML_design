@@ -49,8 +49,7 @@ const LANGUAGES = [
 const Toolbar: React.FC = () => {
   const {
     diagram, project, isModified, undoStack, redoStack,
-    undo, redo, setDiagram, newDiagram: clearDiagram,
-    setProject, newProject, setActiveDiagram, addDiagram,
+    undo, redo, setProject, newProject, setActiveDiagram, addDiagram,
     toggleGrid, setGridSize, setGridColor, setGridThickness,
     setCurrentFilepath, currentFilepath,
   } = useDiagramStore();
@@ -359,6 +358,7 @@ const Toolbar: React.FC = () => {
   const [browseData, setBrowseData] = useState<BrowseResult | null>(null);
   const [currentBrowsePath, setCurrentBrowsePath] = useState('');
   const browseUnsafe = useRef(false);  // track whether we're browsing outside project
+  const currentFileSafe = useRef(true);  // safe flag matching the currently opened file
 
   const handleOpen = async (path?: string, forceUnsafe = false) => {
     setFileDialogVisible(true);
@@ -392,15 +392,27 @@ const Toolbar: React.FC = () => {
   const handleOpenFile = async (path: string, isProject: boolean) => {
     try {
       if (isProject) {
-        const proj = await openProject(path, !browseUnsafe.current);
+        const safe = !browseUnsafe.current;
+        const proj = await openProject(path, safe);
         setProject(proj);
         setCurrentFilepath(path);
+        currentFileSafe.current = safe;
         setFileDialogVisible(false);
         message.success(`项目已打开: ${proj.name} (${proj.diagrams.length} 张图)`);
       } else {
-        const d = await openDiagram(path, !browseUnsafe.current);
-        setDiagram(d);
+        const safe = !browseUnsafe.current;
+        const d = await openDiagram(path, safe);
+        // Wrap single .uml diagram in a fresh Project so stale
+        // sequence/component entries from the previous project are cleared.
+        const proj = {
+          version: '1.0',
+          name: d.name,
+          diagrams: [d],
+          active_diagram_index: 0,
+        };
+        setProject(proj);
         setCurrentFilepath(path);
+        currentFileSafe.current = safe;
         setFileDialogVisible(false);
         message.success('文件已打开');
       }
@@ -416,7 +428,7 @@ const Toolbar: React.FC = () => {
       return;
     }
     try {
-      const result = await saveProject(project, currentFilepath);
+      const result = await saveProject(project, currentFilepath, currentFileSafe.current);
       setCurrentFilepath(result.filepath);
       message.success(`项目已保存: ${result.filename}`);
     } catch {

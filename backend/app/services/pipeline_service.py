@@ -154,6 +154,12 @@ def _save_pipeline_log(pipeline: PipelineState, diagram: UmlDiagram, language: s
             lines.append(f"**生成文件**: {len(files)} 个")
             for f in files:
                 lines.append(f"- `{f}`")
+            if not files and s.status == StageStatus.FAILED:
+                lines.append("")
+                lines.append(
+                    "> 💡 代码生成失败时，LLM 原始输出已保存至 `temp/pipeline_log/llm_raw_*.txt`，"
+                    "请查看该文件了解模型实际返回内容。"
+                )
             lines.append("")
 
             if react_error:
@@ -511,6 +517,61 @@ def confirm_stage(pipeline_id: str, stage: StageName, accepted: bool, comment: s
     return pipeline
 
 
+def _ensure_constraints_coverage(diagram: UmlDiagram, constraints: dict) -> dict:
+    """Safety-net: check that LLM-extracted constraints cover key structural relations.
+
+    If the LLM missed any non-dependency relation, append it programmatically.
+    Returns the (possibly augmented) constraints dict.
+    """
+    if not constraints:
+        constraints = {}
+    if not diagram or not diagram.classes:
+        return constraints
+
+    _name = {c.id: c.name for c in diagram.classes}
+    type_labels = {"inheritance": "继承", "composition": "组合",
+                   "aggregation": "聚合", "realization": "实现"}
+
+    # Build set of (source_name, target_name, type_label) from UML relations
+    structural: set[tuple[str, str, str]] = set()
+    for rel in diagram.relations:
+        if rel.type in ("dependency", "association"):
+            continue  # non-structural — LLM may legitimately omit
+        src = _name.get(rel.source, rel.source)
+        tgt = _name.get(rel.target, rel.target)
+        label = type_labels.get(rel.type, rel.type)
+        structural.add((src, tgt, label))
+
+    if not structural:
+        return constraints
+
+    # Crude check: look for all three tokens in any order in must_preserve entries
+    preserved_text = " ".join(constraints.get("must_preserve", [])).lower()
+    immutable = set(constraints.get("immutable_entities", []))
+
+    added = 0
+    for src, tgt, label in structural:
+        if src.lower() not in preserved_text or tgt.lower() not in preserved_text:
+            entry = f"{src} → {tgt} ({label}) — 不可删除或降级"
+            constraints.setdefault("must_preserve", []).append(entry)
+            added += 1
+        if src not in immutable:
+            immutable.add(src)
+        if tgt not in immutable:
+            immutable.add(tgt)
+
+    if immutable:
+        constraints["immutable_entities"] = sorted(immutable)
+
+    if added:
+        logger.warning(
+            f"[Constraints] Safety-net added {added} missed relations: "
+            f"LLM extracted {len(structural) - added}/{len(structural)}"
+        )
+
+    return constraints
+
+
 async def run_pipeline(
     pipeline_id: str,
     diagram: UmlDiagram,
@@ -573,6 +634,13 @@ async def run_pipeline(
 
         pipeline.stages[0].result = opt_result
         pipeline.stages[0].logs = opt_result.get("changes_summary", "")
+        # ── Extract design constraints for downstream stages ──
+        _constraints = opt_result.get("design_constraints") or {}
+        if _constraints:
+            _constraints = _ensure_constraints_coverage(diagram, _constraints)
+            pipeline.design_constraints = _constraints
+            logger.info(f"[Pipeline] Design constraints: {len(_constraints.get('must_preserve', []))} preserved, "
+                        f"{len(_constraints.get('immutable_entities', []))} immutable")
         yield await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.SUCCESS)
     except Exception as e:
         yield await _update_stage(pipeline, StageName.UML_OPTIMIZE, StageStatus.FAILED, str(e))
@@ -641,12 +709,19 @@ async def run_pipeline(
                     language=language, filename=fname, content=content,
                 ))
             pipeline.stages[2].result = {"files": list(current_code.keys())}
-            _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
             pipeline.stages[2].logs = "Generated: generated/src/"
-            logger.info("[Pipeline Stage 3] Code generation done, proceeding to validation")
+            logger.info("[Pipeline Stage 3] Code generation done")
+
         except Exception as e:
             yield await _update_stage(pipeline, StageName.CODE_GEN, StageStatus.FAILED, str(e))
             return
+
+    # ── Write generated code to disk BEFORE ReAct validation ──
+    # This lets the LLM inspect and validate files directly with run_bash
+    # instead of relying on in-memory code_files parameters.
+    if current_code:
+        _save_generated_files(diagram.name, language, current_code, target_src_dir=source_dir)
+        logger.info(f"[Pipeline Stage 3] Saved {len(current_code)} files to disk")
 
     # ═══════════════════════════════════════════════════════════════
     # Stage 3b: ReAct Code Validation Gate
@@ -658,7 +733,14 @@ async def run_pipeline(
             from app.services.react_engine import ReActEngine, _serialize_steps
             # Only enforce change ratio for existing projects (source_dir non-empty)
             _ratio = max_change_ratio if source_dir else 0
-            react = ReActEngine(max_rounds=5, validation_mode=True, max_change_ratio=_ratio)
+            # Compute the actual source directory (files already written here)
+            _gen_dir = source_dir or os.path.abspath(
+                os.path.join(get_settings().uml_dir, "..", "..", "generated", "src"))
+            react = ReActEngine(
+                max_rounds=5, max_change_ratio=_ratio,
+                design_constraints=pipeline.design_constraints,
+                generated_dir=_gen_dir,
+            )
             react_result = None
             async for progress in react.run_code_validate_and_fix_stream(
                 language=language,
@@ -1567,7 +1649,14 @@ async def resume_pipeline(
             from app.services.react_engine import ReActEngine, _serialize_steps
             # Only enforce change ratio for existing projects (source_dir non-empty)
             _ratio = max_change_ratio if source_dir else 0
-            react = ReActEngine(max_rounds=5, validation_mode=True, max_change_ratio=_ratio)
+            # Compute the actual source directory (files already written here)
+            _gen_dir = source_dir or os.path.abspath(
+                os.path.join(get_settings().uml_dir, "..", "..", "generated", "src"))
+            react = ReActEngine(
+                max_rounds=5, max_change_ratio=_ratio,
+                design_constraints=pipeline.design_constraints,
+                generated_dir=_gen_dir,
+            )
             react_result = None
             async for progress in react.run_code_validate_and_fix_stream(
                 language=language,
@@ -1688,7 +1777,10 @@ async def resume_pipeline(
     if not test_files:
         yield await _update_stage(pipeline, StageName.TEST_GEN, StageStatus.RUNNING)
         try:
-            test_files = await generate_tests(current_code, language, test_cases_data)
+            test_files = await generate_tests(
+                current_code, language, test_cases_data,
+                diagram=optimized_diagram.model_dump() if optimized_diagram else None,
+            )
             if _is_stopped(pipeline_id): return
             if not test_files:
                 logger.error("[Pipeline Stage 5] generate_tests returned empty — LLM JSON parse likely failed")
@@ -1718,7 +1810,10 @@ async def resume_pipeline(
             # Merge source + test files so ReAct's check_imports can resolve
             # cross-module imports (test code imports source modules).
             combined_files = {**current_code, **test_files}
-            react = ReActEngine(max_rounds=3, validation_mode=True)
+            react = ReActEngine(
+                max_rounds=3,
+                design_constraints=pipeline.design_constraints,
+            )
             react_result = None
             async for progress in react.run_code_validate_and_fix_stream(
                 language=language,

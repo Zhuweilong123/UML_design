@@ -29,10 +29,27 @@ def save_diagram(diagram: UmlDiagram, filepath: str | None = None) -> str:
 
 
 def load_diagram(filepath: str) -> UmlDiagram:
-    """Load a UML diagram from a .uml JSON file."""
+    """Load a UML diagram from a .uml JSON file.
+
+    Also handles project-format data (``diagrams`` key) by extracting the
+    first diagram — this can happen when a ``.umlproj`` file was renamed to
+    ``.uml`` or when ``save-project`` wrote to a ``.uml`` path.
+    """
     ensure_dirs()
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
+    # Project-format data → extract the active diagram
+    if "diagrams" in data:
+        diagrams = data.get("diagrams", [])
+        if diagrams:
+            active_idx = data.get("active_diagram_index", 0)
+            if 0 <= active_idx < len(diagrams):
+                logger.info(
+                    f"[FileService] Extracted diagram {active_idx} "
+                    f"from project-format file: {os.path.basename(filepath)}"
+                )
+                return UmlDiagram(**diagrams[active_idx])
+            return UmlDiagram(**diagrams[0])
     return UmlDiagram(**data)
 
 

@@ -309,18 +309,22 @@ async def list_generated_code():
 
 
 @router.post("/save-project", dependencies=[Depends(require_auth)])
-async def save_project_endpoint(project: Project, filename: str = ""):
+async def save_project_endpoint(project: Project, filename: str = "", safe: bool = True):
     """Save a Project to a .umlproj file.
 
     If filename looks like a full path (contains : or /), use it directly after
     path-safety validation.  Otherwise treat it as a short name in uml_dir.
+
+    Pass ``safe=false`` to allow saving outside the project root
+    (e.g. overwriting an external file that was opened with safe=false).
     """
+    path_resolver = safe_path if safe else resolve_path
     filepath = None
     if filename:
         if ':' in filename or '/' in filename or '\\' in filename:
             # Full path — validate and use directly
             try:
-                safe_path(filename)
+                path_resolver(filename)
                 filepath = filename
             except Exception:
                 raise HTTPException(status_code=403, detail="Invalid file path")

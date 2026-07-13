@@ -268,11 +268,15 @@ export async function optimizeProject(req: {
 
 // ─── Project (.umlproj) ─────────────────────────────────
 
-export async function saveProject(project: Project, filename?: string): Promise<{
+export async function saveProject(
+  project: Project, filename?: string, safe = true,
+): Promise<{
   success: boolean; filepath: string; filename: string;
 }> {
-  const params = filename ? `?filename=${encodeURIComponent(filename)}` : '';
-  const { data } = await api.post(`/files/save-project${params}`, project);
+  const params = new URLSearchParams();
+  if (filename) params.set('filename', filename);
+  params.set('safe', String(safe));
+  const { data } = await api.post(`/files/save-project?${params.toString()}`, project);
   return data;
 }
 
