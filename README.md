@@ -35,20 +35,27 @@ https://github.com/user-attachments/assets/6e78effa-e00b-4e69-bdfb-2c3edbb011b9
 - **代码生成**: 调用 LLM 生成 12 种编程语言代码（类图）
 - **已有代码适配**: 加载已有源码，LLM 根据 UML 设计适配/优化
 - **增量测试更新**: 加载已有测试，LLM 根据用例变更增量修改，ReAct 校验测试代码正确性
-- **ReAct 代码看护**: Stage 3 源码生成 + Stage 5 测试生成后均有 ReAct 引擎自动验证（原生 Function Calling）。验证工具链：`check_imports`（语法 + 导入检测，源文件与测试文件联合校验）、`run_module`（子进程运行时验证）、`analyze_error`（错误定位分析）。配置变更上限（%）后自动拦截超大改动，要求 LLM 精简
+- **ReAct 代码看护**: Stage 3 源码生成 + Stage 5 测试生成后均有 ReAct 引擎自动验证（原生 Function Calling）。验证工具链：`check_imports`（从磁盘读取 → 语法+导入检测）、`run_module`（从磁盘读取 → 运行时验证）、`run_bash`（白名单安全沙箱 → 环境查询/测试执行）、`analyze_error`（错误定位分析）、`finish_optimization`（退出信号）。配置变更上限（%）后自动拦截超大改动，要求 LLM 精简
+- **LLM 调用可靠性**:
+  - 空响应自愈：API 返回空 / 被截断时自动重试（降级 json_mode + 翻倍 max_tokens）
+  - 响应 fallback 解析：JSON 解析失败时自动降级提取 markdown 代码块或包装原始输出
+  - 工具参数 JSON 截断防护：Function Calling 参数异常时拒绝并反馈，避免静默崩溃
+  - 代码文件先落盘再校验：生成代码写入 `generated/src/` 后 ReAct 验证，工具从磁盘读取无需搬运源码
+- **设计约束跨阶段传递**: Stage 1 优化完成后 LLM 自动提取关键设计约束（不可变实体、保留关系、设计理由），注入 Stage 3/5/6 的 system prompt，防止后续阶段偏离原始设计意图
+- **逐文件测试生成**: 有大量用例时按模块拆分调用 LLM，每次只生成单个源文件对应的测试（含 UML 全局架构 + 依赖类 API 签名），避免单次调用 token 上限截断
 
 ### 自动化流水线（6 阶段）
 
 | 阶段 | 说明 |
 |------|------|
-| 1. 设计优化 | LLM 交叉校验类图+时序图+组件图的一致性并协同优化，结果推送至 Diff 面板（支持三图切换对比） |
+| 1. 设计优化 | LLM 交叉校验三张图一致性并协同优化，自动提取 `design_constraints` 传递至后续阶段，结果推送 Diff 面板 |
 | 2. 开发确认 | 人工审查优化结果，接受/拒绝/跳过/追加优化 |
-| 3. 代码生成 + ReAct 验证 | 从 UML 生成代码或适配已有代码，ReAct 引擎执行代码质量门禁：语法检查（ast.parse）→ 导入检查（子进程 import）→ 运行时验证（python -c），流式逐轮反馈修正 |
+| 3. 代码生成 + ReAct 验证 | 从 UML 生成代码 → 落盘 `generated/src/` → ReAct 5 轮校验（`check_imports` 编译检查 + `run_module` 导入检查 + `run_bash` 环境查询）。连续 2 轮无工具调用自动提前终止，API 超时 120s |
 | 4. 用例检视 | 加载 Excel 用例库，支持目录浏览选择、双击编辑、增删查改 |
-| 5. 测试生成 + ReAct 校验 | 增量/全量生成测试代码，ReAct 引擎校验语法和导入正确性，确保与源码 API 签名一致 |
+| 5. 测试生成 + ReAct 校验 | **逐文件生成**（按模块拆分，每次调用含 UML 全局架构 + 被测类源码 + 依赖类 API 签名），ReAct 3 轮校验语法和导入正确性 |
 | 6. 测试执行 + 代码优化 | 真实 pytest 执行，基于失败反馈优化源码（最多 3 轮，轮间记忆 + 回归回退 + 僵化退出） |
 
-**流水线配置项**: 选择已有源码/测试目录、设置代码变更上限（%），超过阈值自动要求 LLM 精简改动。每次运行自动生成详细 Markdown 报告至 `temp/pipeline_log/` 目录。UML 评审和用例审核记录统一归入 `temp/dev_review.txt`。
+**流水线配置项**: 选择已有源码/测试目录、设置代码变更上限（%），超过阈值自动要求 LLM 精简改动。每次运行自动生成详细 Markdown 报告至 `temp/pipeline_log/`，LLM 原始输出同步保存至同目录 `llm_raw_*.txt` 便于故障排查。UML 评审和用例审核记录统一归入 `temp/dev_review.txt`。
 
 ### 安全
 - Bearer Token API 鉴权（可配置，本地开发自动跳过）

@@ -5,7 +5,7 @@ websockets==13.0
 pydantic==2.10.0
 pydantic-settings==2.6.0
 httpx==0.28.0
-openai==1.55.0
+openai>=1.68.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 jinja2==3.1.4
@@ -14,3 +14,5 @@ openpyxl==3.1.5
 diff-match-patch==20230430
 aiofiles==24.1.0
 python-dotenv==1.0.1
+pytest>=7.0
+pytest-timeout>=2.0
