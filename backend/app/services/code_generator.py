@@ -210,6 +210,76 @@ def _extract_api_signatures(code_files: dict[str, str], language: str) -> str:
     return "\n".join(lines_out)
 
 
+def _dump_raw_llm_response(response: str, context: str, label: str = "fallback"):
+    """Save raw LLM response to pipeline_log for post-mortem debugging."""
+    try:
+        from pathlib import Path as _P
+        from datetime import datetime as _dt
+        _log_d = _P(__file__).resolve().parent.parent.parent.parent / "temp" / "pipeline_log"
+        _log_d.mkdir(exist_ok=True)
+        _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        _fname = f"llm_raw_{label}_{context}_{_ts}.txt"
+        _fp = _log_d / _fname
+        _fp.write_text(response, encoding="utf-8")
+        _log = logging.getLogger(__name__)
+        _log.warning(
+            f"[RawLLM] {label} for '{context}': "
+            f"saved {len(response)} chars → {_fp}"
+        )
+        return str(_fp)
+    except Exception:
+        return ""
+
+
+def _parse_code_response(response: str, context: str = "code") -> dict[str, str]:
+    """Parse LLM response into ``{filename: content}`` dict.
+
+    1. Try direct JSON (via ``clean_llm_json_response``).
+    2. Fallback: split markdown-fenced ``### filename`` blocks.
+    3. Last resort: wrap entire response as ``{context}.py``.
+
+    When the direct JSON path fails, the raw response is saved to
+    ``pipeline_log/`` for post-mortem diagnostics.
+    """
+    import re as _re
+
+    # ── 1. Direct JSON ──
+    try:
+        cleaned = clean_llm_json_response(response)
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        _dump_raw_llm_response(response, context, label="json_parse_failed")
+
+    # ── 2. Markdown-fenced blocks ──
+    blocks = _re.findall(
+        r'(?:###\s*|#\s*File:\s*)(\S+\.\w+)\s*\n\s*```\w*\n(.*?)```',
+        response, _re.DOTALL,
+    )
+    if blocks:
+        return {name: content.strip() for name, content in blocks}
+
+    # Also try blocks without the ### header
+    fence_blocks = _re.findall(
+        r'```(\w+)\n(.*?)```', response, _re.DOTALL,
+    )
+    if fence_blocks:
+        lang_ext = {"python": ".py", "javascript": ".js", "typescript": ".ts",
+                    "java": ".java", "cpp": ".cpp", "csharp": ".cs",
+                    "go": ".go", "rust": ".rs", "ruby": ".rb",
+                    "swift": ".swift", "kotlin": ".kt", "php": ".php"}
+        result = {}
+        for i, (lang, content) in enumerate(fence_blocks):
+            ext = lang_ext.get(lang, f".{lang}")
+            name_match = _re.search(r'(?:class|def|func|function|struct|interface)\s+(\w+)', content)
+            fname = f"{name_match.group(1).lower()}{ext}" if name_match else f"module_{i+1}{ext}"
+            result[fname] = content.strip()
+        return result
+
+    # ── 3. Wrap entire response ──
+    _dump_raw_llm_response(response, context, label="wrapped_as_raw")
+    return {f"{context}.py": response.strip()}
+
+
 async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
     """Generate code files from a UML diagram."""
     if language not in SUPPORTED_LANGUAGES:
@@ -221,18 +291,18 @@ async def generate_code(diagram: UmlDiagram, language: str) -> dict[str, str]:
         system_prompt=f"You are an expert {language} developer. Output only valid JSON mapping filenames to file content.",
         temperature=0.3,
         max_tokens=8192,
-        json_mode=True,
     )
 
-    # Parse JSON from response
-    try:
-        # Strip markdown code fences if present
-        cleaned = clean_llm_json_response(response)
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        logger = logging.getLogger(__name__)
-        logger.warning(f"[CodeGen] JSON parse failed for code generation, raw response ({len(response)} chars): {response[:300]}")
+    if not response.strip():
+        _log = logging.getLogger(__name__)
+        _log.warning("[CodeGen] Empty response from LLM")
         return {}
+
+    result = _parse_code_response(response, context=diagram.name or "code")
+    if not result:
+        _log = logging.getLogger(__name__)
+        _log.warning(f"[CodeGen] Could not parse response ({len(response)} chars): {response[:300]}")
+    return result
 
 
 async def generate_integrated_code(
@@ -339,40 +409,223 @@ Only output the JSON object, no other text.
         system_prompt=f"You are an expert {language} developer. Generate code from UML+sequence designs. Output only valid JSON.",
         temperature=0.3,
         max_tokens=8192,
-        json_mode=True,
     )
-    try:
-        cleaned = clean_llm_json_response(response)
-        result = json.loads(cleaned)
-        if isinstance(result, dict) and result:
-            _logger.info(f"[Integrated] Generated {len(result)} files from class+sequence diagrams")
-            return result, prompt
+    if not response.strip():
+        _logger.warning("[Integrated] Empty response from LLM")
         return {}, prompt
-    except json.JSONDecodeError:
-        _logger.warning(f"[Integrated] JSON parse failed, raw: {response[:200]}")
-        return {}, prompt
+    result = _parse_code_response(response, context="integrated")
+    if result:
+        _logger.info(f"[Integrated] Generated {len(result)} files from class+sequence diagrams")
+    else:
+        _logger.warning(f"[Integrated] Could not parse response ({len(response)} chars): {response[:200]}")
+    return result, prompt
+
+
+async def generate_tests_per_file(
+    code_files: dict[str, str], language: str, test_cases: str = "",
+    diagram: dict | None = None,
+) -> dict[str, str]:
+    """Generate tests one source file at a time to avoid token-limit truncation.
+
+    Each LLM call receives:
+    - UML diagram JSON (global architecture context)
+    - Full source of the file under test
+    - API signatures of all OTHER files (dependency interfaces only)
+    - Test cases filtered to match the current module
+
+    Returns the merged dict of all generated test files.
+    """
+    import re as _re
+    _log = logging.getLogger(__name__)
+
+    # ── Extract API signatures for all files (lightweight dependency context) ──
+    all_signatures = _extract_api_signatures(code_files, language)
+
+    # ── Build UML context block (global architecture, compact) ──
+    uml_block = ""
+    if diagram:
+        uml_parts = []
+        for cls in (diagram.get("classes") or []):
+            methods = [m.get("name", "") + "(" + m.get("params", "") + ")"
+                       for m in (cls.get("methods") or [])]
+            uml_parts.append(
+                f"  {cls.get('name','?')} ({cls.get('stereotype','')}): "
+                f"{', '.join(methods) if methods else '(no methods)'}"
+            )
+        if diagram.get("relations"):
+            uml_parts.append("Relations:")
+            for r in diagram["relations"]:
+                uml_parts.append(f"  {r.get('source','?')} → {r.get('target','?')} [{r.get('type','')}]")
+        uml_block = "\n".join(uml_parts) if uml_parts else ""
+
+    source_files = sorted(code_files.keys())
+    all_tests: dict[str, str] = {}
+    total_modules = len([f for f in source_files if f.endswith(".py") and not f.startswith("test_")])
+
+    for fname in source_files:
+        if not fname.endswith(".py") or fname.startswith("test_"):
+            continue
+        module_name = fname.rsplit(".", 1)[0]
+
+        # ── Filter test cases relevant to this module ──
+        module_cases = _filter_test_cases_for_module(test_cases, module_name, _re)
+        if test_cases and not module_cases:
+            _log.info(f"[TestGen] No test cases match module '{module_name}', skipping")
+            continue
+
+        # ── Build prompt: UML + target source + dependency signatures + cases ──
+        target_source = code_files[fname]
+        dep_signatures = "\n".join(
+            sig for sig in all_signatures.split("\n")
+            if fname.rsplit(".", 1)[0] not in sig.lower()
+        ) if all_signatures else ""
+
+        prompt = _build_per_file_test_prompt(
+            module_name=module_name,
+            target_source=target_source,
+            dep_signatures=dep_signatures,
+            module_cases=module_cases,
+            language=language,
+            uml_block=uml_block,
+        )
+
+        _log.info(
+            f"[TestGen] Generating tests for '{module_name}' "
+            f"({len(module_cases)} cases, {len(target_source)} chars source)"
+        )
+
+        response = await chat(
+            prompt=prompt,
+            system_prompt=f"You are an expert {language} test engineer. Output valid JSON with exactly one test file.",
+            temperature=0.3,
+            max_tokens=8192,
+        )
+        if not response.strip():
+            _log.warning(f"[TestGen] Empty response for '{module_name}'")
+            continue
+
+        result = _parse_code_response(response, context=f"test_{module_name}")
+        for tfname, tcontent in result.items():
+            if tfname in all_tests:
+                all_tests[tfname] += "\n\n" + tcontent
+            else:
+                all_tests[tfname] = tcontent
+
+    _log.info(f"[TestGen] Per-file generation complete: {len(all_tests)} test files from {total_modules} modules")
+    return all_tests
+
+
+def _filter_test_cases_for_module(test_cases: str, module_name: str, _re=None) -> str:
+    """Extract test case lines relevant to *module_name* from the test cases text."""
+    if not test_cases or not test_cases.strip():
+        return ""
+    if _re is None:
+        import re as _re
+    # Test cases are in format: "- [TC-XXX-NNN] ClassName.methodName: description"
+    lines = test_cases.split("\n")
+    matched = []
+    # Patterns to match: case ID prefix, or class name mentioned anywhere on the line
+    mod_variants = [
+        module_name,
+        module_name.replace("_", ""),
+        module_name.upper(),
+    ]
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lower = stripped.lower()
+        if any(v.lower() in lower for v in mod_variants):
+            matched.append(stripped)
+    return "\n".join(matched) if matched else ""
+
+
+def _build_per_file_test_prompt(
+    module_name: str,
+    target_source: str,
+    dep_signatures: str,
+    module_cases: str,
+    language: str,
+    uml_block: str,
+) -> str:
+    """Build a compact prompt for generating tests for a single module."""
+    has_cases = bool(module_cases and module_cases.strip())
+
+    parts = [
+        f"Generate unit tests for the **{module_name}** module in {language}.",
+        "",
+    ]
+
+    if uml_block:
+        parts.extend([
+            "## Global Architecture (class diagram context):",
+            uml_block,
+            "",
+        ])
+
+    parts.extend([
+        f"## Source Code for {module_name}.py (the module under test):",
+        f"```{language}",
+        target_source,
+        "```",
+        "",
+    ])
+
+    if dep_signatures.strip():
+        parts.extend([
+            "## Dependencies (API signatures only — for correct imports):",
+            dep_signatures[:3000],
+            "",
+        ])
+
+    if has_cases:
+        parts.extend([
+            f"## Test Cases for {module_name}:",
+            "ONE test function per case ID below.",
+            module_cases,
+            "",
+            "Function naming: `test_<CASE_ID>_<short_desc>` (replace hyphens with underscores).",
+            "",
+        ])
+
+    parts.extend([
+        "## Output:",
+        "Return a JSON object with exactly ONE test file:",
+        f'{{{{"test_{module_name}.py": "import pytest\\n..."}}}}',
+        "Only output the JSON object, no other text.",
+        "IMPORTANT: output ONLY ONE test file for this module — do NOT generate tests for other modules.",
+    ])
+
+    return "\n".join(parts)
 
 
 async def generate_tests(
-    code_files: dict[str, str], language: str, test_cases: str = ""
+    code_files: dict[str, str], language: str, test_cases: str = "",
+    diagram: dict | None = None,
 ) -> dict[str, str]:
-    """Generate test files for the given code, optionally using Excel test case requirements."""
+    """Generate test files. Uses per-file generation when *test_cases* are provided
+    to avoid token-limit truncation with many test cases."""
+    # Per-file mode: avoids truncation for large test case sets
+    if test_cases and test_cases.strip():
+        return await generate_tests_per_file(code_files, language, test_cases, diagram)
+
+    # Single-call mode (no test cases — generic unit tests)
     prompt = _build_test_prompt(code_files, language, test_cases)
     response = await chat(
         prompt=prompt,
         system_prompt=f"You are an expert {language} test engineer. Output only valid JSON.",
         temperature=0.3,
         max_tokens=8192,
-        json_mode=True,
     )
-    try:
-        cleaned = clean_llm_json_response(response)
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        logger = logging.getLogger(__name__)
-        logger.warning(f"[TestGen] JSON parse failed for test generation, raw response ({len(response)} chars): {response[:300]}")
-        # Don't save raw response as .py — it's not valid Python code
+    if not response.strip():
+        _log_t = logging.getLogger(__name__)
+        _log_t.warning("[TestGen] Empty response from LLM")
         return {}
+    result = _parse_code_response(response, context="tests")
+    if not result:
+        _log_t = logging.getLogger(__name__)
+        _log_t.warning(f"[TestGen] Could not parse response ({len(response)} chars): {response[:300]}")
+    return result
 
 
 def _build_global_prompt(
@@ -440,7 +693,12 @@ def _build_global_prompt(
   }},
   "consistency_report": [],
   "changes_summary": "Created new design from requirements",
-  "diff": "All diagrams generated from scratch"
+  "diff": "All diagrams generated from scratch",
+  "design_constraints": {{
+    "must_preserve": ["User 和 Order 的 1..* association 关系不可删除"],
+    "immutable_entities": ["User", "Order"],
+    "design_rationale": "采用策略模式支持多种支付方式扩展"
+  }}
 }}
 ```"""
 
@@ -487,7 +745,12 @@ Only output the JSON object, no other text.
     {{"severity": "error|warning", "msg": "..."}}
   ],
   "changes_summary": "summary",
-  "diff": "what changed"
+  "diff": "what changed",
+  "design_constraints": {{
+    "must_preserve": ["约束1: 关键关系和接口不可修改"],
+    "immutable_entities": ["不可变实体名称"],
+    "design_rationale": "核心设计理由简述"
+  }}
 }}
 ```
 Only output the JSON object, no other text.
@@ -965,11 +1228,10 @@ async def fix_code(
         temperature=0.3,
         max_tokens=8192,
     )
-    try:
-        cleaned = clean_llm_json_response(response)
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
+    if not response.strip():
         return {f"fixed_{k}": v for k, v in code_files.items()}
+    result = _parse_code_response(response, context="fixed")
+    return result if result else {f"fixed_{k}": v for k, v in code_files.items()}
 
 
 async def adapt_code_to_uml(
@@ -1017,21 +1279,21 @@ async def adapt_code_to_uml(
         system_prompt=f"You are an expert {language} developer adapting code to a UML design. Output only valid JSON.",
         temperature=0.3,
         max_tokens=8192,
-        json_mode=True,
     )
-    try:
-        cleaned = clean_llm_json_response(response)
-        fixed = json.loads(cleaned)
-        if isinstance(fixed, dict) and fixed:
-            import logging
-            _logger = logging.getLogger(__name__)
-            _logger.info(f"[adapt_code] LLM returned {len(fixed)} modified source files: {list(fixed.keys())}")
-            return fixed
-        return existing_code
-    except json.JSONDecodeError:
+    if not response.strip():
+        import logging
         _logger = logging.getLogger(__name__)
-        _logger.warning(f"[adapt_code] JSON parse failed, keeping existing code")
+        _logger.warning("[adapt_code] Empty response, keeping existing code")
         return existing_code
+    result = _parse_code_response(response, context="adapted")
+    if result:
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.info(f"[adapt_code] LLM returned {len(result)} modified source files: {list(result.keys())}")
+        return result
+    _logger = logging.getLogger(__name__)
+    _logger.warning("[adapt_code] Could not parse response, keeping existing code")
+    return existing_code
 
 
 async def update_tests_incremental(
@@ -1080,21 +1342,21 @@ async def update_tests_incremental(
         system_prompt=f"You are an expert {language} test engineer. Update test files incrementally. Output only valid JSON.",
         temperature=0.3,
         max_tokens=8192,
-        json_mode=True,
     )
-    try:
-        cleaned = clean_llm_json_response(response)
-        fixed = json.loads(cleaned)
-        if isinstance(fixed, dict) and fixed:
-            import logging
-            _logger = logging.getLogger(__name__)
-            _logger.info(f"[update_tests] LLM returned {len(fixed)} modified test files: {list(fixed.keys())}")
-            return fixed
-        return existing_tests
-    except json.JSONDecodeError:
+    if not response.strip():
+        import logging
         _logger = logging.getLogger(__name__)
-        _logger.warning(f"[update_tests] JSON parse failed, keeping existing tests")
+        _logger.warning("[update_tests] Empty response, keeping existing tests")
         return existing_tests
+    result = _parse_code_response(response, context="updated_tests")
+    if result:
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.info(f"[update_tests] LLM returned {len(result)} modified test files: {list(result.keys())}")
+        return result
+    _logger = logging.getLogger(__name__)
+    _logger.warning("[update_tests] Could not parse response, keeping existing tests")
+    return existing_tests
 
 
 def _get_extension(language: str) -> str:

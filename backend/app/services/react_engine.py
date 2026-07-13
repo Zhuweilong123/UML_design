@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from app.core.config import get_settings
 from app.services.llm_service import get_client, chat_with_tools
-from app.services.tools import create_tools, create_validation_tools
+from app.services.tools import create_tools
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -61,23 +61,24 @@ def _serialize_steps(steps: list[ReActStep]) -> list[dict]:
 class ReActEngine:
     """ReAct engine with native Function Calling support (DeepSeek/OpenAI).
 
-    Two modes:
-    - ``validation_mode=True``: loads validation tools (syntax check, import
-      check, module run) — used in Pipeline Stage 3.
-    - ``validation_mode=False``: loads the full tool set including diff and
-      simulation — used for general code optimisation.
+    Uses the unified tool registry from :func:`create_tools` — a single set
+    of tools shared by Pipeline Stage 3/5 validation and general-purpose code
+    optimisation.
     """
 
     def __init__(
-        self, max_rounds: int = 5, validation_mode: bool = False,
+        self, max_rounds: int = 5,
         max_change_ratio: int = 0,
+        design_constraints: dict | None = None,
+        generated_dir: str = "",
     ):
         self.client = get_client()
         self.model = settings.deepseek_model
         self.max_rounds = max_rounds
-        self.validation_mode = validation_mode
         self.max_change_ratio = max_change_ratio  # 0 = disabled
-        self.tools = create_validation_tools() if validation_mode else create_tools()
+        self.design_constraints = design_constraints
+        self.generated_dir = generated_dir
+        self.tools = create_tools()
         self.tool_specs = [t.to_openai_spec() for t in self.tools]
         self.tool_map = {t.name: t for t in self.tools}
 
@@ -205,6 +206,41 @@ class ReActEngine:
 
     # ── Prompt builders ────────────────────────────
 
+    @staticmethod
+    def _build_constraints_block(constraints: dict | None) -> str:
+        """Build a short, high-density constraints block for system prompt injection.
+
+        Returns an empty string when *constraints* is ``None`` or empty.
+        """
+        if not constraints:
+            return ""
+
+        lines = [
+            "## Design Constraints (MUST preserve across validation)",
+            "These were extracted from the UML optimisation stage. Do NOT violate them.",
+            "",
+        ]
+
+        must_preserve = constraints.get("must_preserve", [])
+        if must_preserve:
+            lines.append("**Must preserve:**")
+            for item in must_preserve:
+                lines.append(f"  - {item}")
+            lines.append("")
+
+        immutable = constraints.get("immutable_entities", [])
+        if immutable:
+            lines.append("**Immutable entities** (do NOT rename or delete):")
+            lines.append("  " + ", ".join(immutable))
+            lines.append("")
+
+        rationale = constraints.get("design_rationale", "")
+        if rationale:
+            lines.append(f"**Design rationale:** {rationale}")
+            lines.append("")
+
+        return "\n".join(lines)
+
     def _build_validation_system_prompt(self, language: str) -> str:
         """System prompt for Stage 3 code validation mode.
 
@@ -245,7 +281,8 @@ class ReActEngine:
 
         parts.extend([
             "## Validation Flow",
-            "1. **Batch validation**: call check_imports (covers syntax too) + run_module together",
+            f"Generated code is on disk at: `{self.generated_dir or 'generated/src/'}`",
+            "1. **Batch validation**: call check_imports + run_module with *source_dir* (NOT code_files)",
             "2. If any errors are found, fix ONLY the affected files and re-validate",
         ])
         if has_change_limit:
@@ -264,7 +301,19 @@ class ReActEngine:
             "- ALWAYS re-validate after making fixes",
             "- Call finish_optimization ONLY when every validation passes",
             "- You have limited rounds — batch tools aggressively",
+            "- **MUST check ALL generated files** — pass the complete code_files dict to "
+            "  check_imports and run_module. Do NOT omit any file.",
+            "- **Validate code with check_imports + run_module** — "
+            "pass *source_dir* to read files directly from disk "
+            "(NO need to pass code_files). Use run_bash for environment queries "
+            "(python --version, pip list, pytest, git status).",
         ])
+
+        # ── Inject design constraints from earlier pipeline stages ──
+        constraints_block = self._build_constraints_block(self.design_constraints)
+        if constraints_block:
+            parts.append("")
+            parts.append(constraints_block)
 
         return "\n".join(parts)
 
@@ -469,7 +518,15 @@ Fix source code based on failures. Call finish_optimization when done."""
                 try:
                     tool_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
-                    tool_args = {}
+                    raw_args = tc["function"].get("arguments", "")[:200]
+                    obs = (
+                        f"Invalid JSON arguments for tool '{tool_name}'. "
+                        f"Raw: {raw_args}. "
+                        f"Please re-send the tool call with valid JSON arguments."
+                    )
+                    observations.append(f"[{tool_name}] {obs}")
+                    tool_results.append({"tool_call_id": tc["id"], "content": obs})
+                    continue
 
                 # Execute tool
                 obs = ""
@@ -601,8 +658,11 @@ Fix source code based on failures. Call finish_optimization when done."""
             {"role": "user", "content": user_prompt},
         ]
 
+        no_tool_call_streak = 0  # early-exit counter for stuck loops
+
         for round_num in range(1, self.max_rounds + 1):
             # ── Call LLM with tools ──
+            logger.info(f"[ReAct] Round {round_num}/{self.max_rounds} starting...")
             response_msg = None
             for attempt in range(3):
                 try:
@@ -633,10 +693,15 @@ Fix source code based on failures. Call finish_optimization when done."""
 
             # ── No tool calls ──
             if not response_msg.get("tool_calls"):
+                no_tool_call_streak += 1
                 step = ReActStep(
                     round=round_num,
                     thought=(response_msg.get("content") or "")[:500],
-                    observation="No tool call in response, waiting for next round",
+                    observation=(
+                        f"No tool call in response (streak={no_tool_call_streak}). "
+                        "Waiting for next round." if no_tool_call_streak < 2
+                        else "No tool call 2 rounds in a row — stopping early."
+                    ),
                 )
                 steps.append(step)
                 messages.append({
@@ -644,9 +709,13 @@ Fix source code based on failures. Call finish_optimization when done."""
                     "content": response_msg.get("content") or "",
                 })
                 yield {"react_steps": _serialize_steps(steps), "round": round_num}
+                if no_tool_call_streak >= 2:
+                    logger.warning(f"[ReAct] Early exit: {no_tool_call_streak} rounds without tool calls")
+                    break
                 continue
 
             # ── Process tool calls ──
+            no_tool_call_streak = 0  # reset — tools were called
             tool_calls = response_msg["tool_calls"]
             step = ReActStep(
                 round=round_num,
@@ -669,7 +738,15 @@ Fix source code based on failures. Call finish_optimization when done."""
                 try:
                     tool_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
-                    tool_args = {}
+                    raw_args = tc["function"].get("arguments", "")[:200]
+                    obs = (
+                        f"Invalid JSON arguments for tool '{tool_name}'. "
+                        f"Raw: {raw_args}. "
+                        f"Please re-send the tool call with valid JSON arguments."
+                    )
+                    observations.append(f"[{tool_name}] {obs}")
+                    tool_results.append({"tool_call_id": tc["id"], "content": obs})
+                    continue
 
                 obs = ""
                 tool = self.tool_map.get(tool_name)

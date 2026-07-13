@@ -57,6 +57,8 @@ class PipelineState(BaseModel):
     code_artifacts: list[CodeArtifact] = Field(default_factory=list)
     optimization_round: int = 0  # max 3 rounds for code_optimize
     review_log: list[dict] = Field(default_factory=list)
+    # Design constraints extracted from Stage 1 — injected into Stage 3/5/6 system prompts
+    design_constraints: dict | None = None
 
 
 class ConfirmRequest(BaseModel):

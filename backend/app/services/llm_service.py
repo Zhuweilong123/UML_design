@@ -62,24 +62,61 @@ async def chat(
 
     Args:
         model: Model name or tier. Defaults to ``deepseek-v4-pro`` if omitted.
+
+    When the API returns an empty response the call is retried once without
+    ``json_mode`` and with doubled ``max_tokens`` — this recovers from
+    JSON-mode rejections and token-exhaustion truncations.
     """
-    client = get_client()
-    messages: list[dict] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+    import logging as _log
+    _logger = _log.getLogger(__name__)
 
-    kwargs = dict(
-        model=_resolve_model(model),
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
+    async def _call(_json_mode: bool, _max_tokens: int) -> tuple[str, str | None]:
+        client = get_client()
+        messages: list[dict] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
 
-    response = await client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content or ""
+        kwargs = dict(
+            model=_resolve_model(model),
+            messages=messages,
+            temperature=temperature,
+            max_tokens=_max_tokens,
+        )
+        if _json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        kwargs["timeout"] = 120.0
+        response = await client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content or ""
+        finish = response.choices[0].finish_reason or ""
+        return content, finish
+
+    content, finish = await _call(json_mode, max_tokens)
+
+    # ── Retry when truncated: finish="length" means output hit max_tokens ──
+    if finish == "length":
+        _logger.warning(
+            f"[chat] Output truncated at {max_tokens} tokens (got {len(content)} chars). "
+            f"Retrying with max_tokens={max_tokens * 2}..."
+        )
+        content, finish = await _call(_json_mode=False, _max_tokens=max_tokens * 2)
+
+    # ── Retry when completely empty (API refused / json_mode conflict) ──
+    if not content:
+        _logger.warning(
+            f"[chat] Empty response (finish={finish}, json_mode={json_mode}). "
+            "Retrying without json_mode..."
+        )
+        content, finish = await _call(_json_mode=False, _max_tokens=max_tokens)
+
+    if not content:
+        _logger.warning(
+            f"[chat] Empty response after retries, finish={finish}. "
+            f"Prompt head: {prompt[:200]}"
+        )
+
+    return content
 
 
 async def chat_stream(
@@ -152,6 +189,7 @@ async def chat_with_tools(
         tool_choice=tool_choice,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=120.0,
     )
     msg = response.choices[0].message
     result: dict = {"content": msg.content, "tool_calls": None}
