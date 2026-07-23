@@ -156,6 +156,7 @@ class UmlDiagram(BaseModel):
     version: str = "1.0"
     name: str = "Untitled"
     diagram_type: str = "class"  # "class" | "sequence" | "component"
+    component_id: str = ""  # CompNode.id — links this diagram to a component diagram node
     # --- Class diagram fields ---
     classes: list[UmlClass] = Field(default_factory=list)
     relations: list[UmlRelation] = Field(default_factory=list)

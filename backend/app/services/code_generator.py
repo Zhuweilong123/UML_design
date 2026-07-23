@@ -678,10 +678,13 @@ def _build_global_prompt(
   "optimized": {{
     "class": {{
       "name": "Design",
+      "component_id": "",
       "classes": [{{"id": "...", "name": "...", "stereotype": "class", "attributes": [...], "methods": [...], "position": {{"x": 100, "y": 100}}, "size": {{"width": 200, "height": 150}}, "note": "", "provided_interfaces": [], "required_interfaces": []}}],
       "relations": [{{"id": "...", "source": "...", "target": "...", "type": "association", "multiplicity_source": "", "multiplicity_target": "", "role_name": "", "note": ""}}]
     }},
     "sequence": {{
+      "name": "Sequence",
+      "component_id": "",
       "lifelines": [{{"id": "...", "name": "...", "x": 100, "class_ref": "", "activations": []}}],
       "messages": [{{"id": "...", "from_lifeline": "...", "to_lifeline": "...", "label": "method()", "type": "sync", "order": 1, "note": ""}}],
       "fragments": []
@@ -709,7 +712,8 @@ def _build_global_prompt(
 5. If any diagram is missing, generate it based on the others
 6. Optimize each diagram while maintaining consistency across all three
 7. PRESERVE all coordinate fields (position/size/x/y/width/height) across ALL diagram types. NEVER zero them out.
-8. If the user requests repositioning, adjust coordinates thoughtfully. Otherwise, keep existing positions exactly."""
+8. If the user requests repositioning, adjust coordinates thoughtfully. Otherwise, keep existing positions exactly.
+9. COMPONENT LINKING: Class and sequence diagrams have a "component_id" field that links them to a component diagram node (CompNode.id). When a class diagram describes the internal structure of a specific component, set component_id to that component's id. When a sequence diagram shows the interactions of a specific component, set component_id to that component's id. Use the component IDs from the provided component diagram as reference."""
 
     if is_empty:
         prompt = f"""Generate a complete UML system design from the following requirements.
@@ -904,11 +908,40 @@ class _JsonElementExtractor:
         self._esc = False
         self._elem_start = -1   # buffer offset where current depth-4 element begins
         self._section = None    # 'class', 'sequence', or 'component'
+        self._scan_pos = 0      # last position scanned for component_id
+        self._seen_cids = set() # avoid duplicate diagram_meta emission
 
     def feed(self, chunk: str) -> list[tuple[str, str]]:
         """Feed a new text chunk. Returns (type, json_string) tuples for completed elements."""
         self._buf += chunk
         elements: list[tuple[str, str]] = []
+
+        # ── Scan new content for component_id values ─────
+        new_text = self._buf[self._scan_pos:]
+        idx = 0
+        while True:
+            idx = new_text.find('"component_id"', idx)
+            if idx < 0:
+                break
+            # Find the colon and value string
+            colon_idx = new_text.find(':', idx)
+            if colon_idx < 0:
+                break
+            val_start = new_text.find('"', colon_idx + 1)
+            if val_start < 0:
+                break
+            val_end = new_text.find('"', val_start + 1)
+            if val_end < 0:
+                break
+            cid = new_text[val_start + 1:val_end]
+            if cid and cid not in self._seen_cids:
+                self._seen_cids.add(cid)
+                elements.append(('diagram_meta', json.dumps({
+                    'component_id': cid,
+                    'diagram_type': self._section or 'class',
+                })))
+            idx = val_end + 1
+        self._scan_pos = max(0, len(self._buf) - 512)
 
         while self._pos < len(self._buf):
             c = self._buf[self._pos]
@@ -1083,7 +1116,8 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 5. Message "order" should be sequential from top to bottom
 6. PRESERVE all "note" and "class_ref" fields
 7. PRESERVE the "x" field on every lifeline — NEVER reset lifeline positions
-8. PRESERVE the "y" and "order" fields on every message — NEVER reset message Y positions"""
+8. PRESERVE the "y" and "order" fields on every message — NEVER reset message Y positions
+9. PRESERVE the "component_id" field — it links this diagram to a component diagram node. If set, keep it; if designing for a specific component, reference its CompNode.id"""
         default_inst = "优化时序图交互流程：检查遗漏/多余消息、调用顺序合理性、消息命名准确性"
         system = "You are an expert software architect specializing in UML sequence diagrams and interaction design."
     elif dt == "component":
@@ -1094,7 +1128,8 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 4. comp_relations: "id", "source", "target", "type" (dependency|delegation)
 5. Every component and relation MUST have a unique "id"
 6. PRESERVE all "provided_interfaces" and "required_interfaces" lists
-7. PRESERVE the "x", "y", "width", "height" fields on every component — NEVER reset their positions or sizes"""
+7. PRESERVE the "x", "y", "width", "height" fields on every component — NEVER reset their positions or sizes
+8. PRESERVE the "parent_id" field on every component — it defines the component nesting hierarchy"""
         default_inst = "优化组件架构：检查组件职责划分、依赖关系合理性、接口设计完整性"
         system = "You are an expert software architect specializing in UML component diagrams and system architecture."
     else:
@@ -1107,7 +1142,8 @@ async def optimize_uml(diagram: UmlDiagram, instructions: str = "") -> dict:
 5. Every class and relation MUST have a unique "id"
 6. PRESERVE all "note" fields on classes and relations
 7. PRESERVE "role_name", "multiplicity_source", "multiplicity_target" on relations
-8. PRESERVE all "position" and "size" fields on every class — NEVER reset them"""
+8. PRESERVE all "position" and "size" fields on every class — NEVER reset them
+9. PRESERVE the "component_id" field — it links this diagram to a component diagram node. If set, keep it; if designing for a specific component, reference its CompNode.id"""
         default_inst = "General design optimization: improve cohesion, reduce coupling, apply design patterns where appropriate."
         system = "You are an expert software architect specializing in UML design and design patterns. Always use +, -, # for visibility values."
 

@@ -80,6 +80,7 @@ export interface UmlDiagram {
   version: string;
   name: string;
   diagram_type?: string;  // "class" | "sequence" | "component"
+  component_id?: string;  // CompNode.id — links this diagram to a component diagram node
   // Class diagram
   classes: UmlClass[];
   relations: UmlRelation[];
@@ -106,6 +107,7 @@ export function createDefaultDiagram(name = 'Untitled'): UmlDiagram {
     version: '1.0',
     name,
     diagram_type: 'class',
+    component_id: '',
     classes: [],
     relations: [],
     lifelines: [],
