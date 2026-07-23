@@ -29,6 +29,7 @@ const PropertyPanel: React.FC = () => {
     updateLifeline, removeLifeline,
     updateMessage, removeMessage,
     updateComponent, removeComponent,
+    project, setActiveDiagram, addDiagram,
   } = useDiagramStore();
 
   const selectedClass = diagram.classes.find((c) => c.id === selectedClassId);
@@ -474,6 +475,66 @@ const PropertyPanel: React.FC = () => {
               rows={2} placeholder="IDatabase&#10;ILogger" />
           </Form.Item>
         </Form>
+
+        {/* Linked diagrams */}
+        {(() => {
+          const linkedClass = project.diagrams.filter(
+            (d) => d.component_id === selectedComponent.id && (d.diagram_type || 'class') === 'class'
+          );
+          const linkedSeq = project.diagrams.filter(
+            (d) => d.component_id === selectedComponent.id && d.diagram_type === 'sequence'
+          );
+          return (
+            <>
+              <Divider orientation="left" plain style={{ fontSize: 12 }}>
+                关联图 ({linkedClass.length + linkedSeq.length})
+              </Divider>
+              {linkedClass.length === 0 && linkedSeq.length === 0 && (
+                <p style={{ fontSize: 12, color: '#bbb' }}>暂无关联的类图或时序图</p>
+              )}
+              {linkedClass.map((d) => (
+                <div key={d.name} style={{
+                  padding: '4px 8px', cursor: 'pointer', fontSize: 12,
+                  borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6,
+                  marginBottom: 2,
+                }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f5ff')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  onClick={() => {
+                    const idx = project.diagrams.indexOf(d);
+                    if (idx >= 0) setActiveDiagram(idx);
+                  }}
+                >
+                  📋 {d.name}
+                </div>
+              ))}
+              {linkedSeq.map((d) => (
+                <div key={d.name} style={{
+                  padding: '4px 8px', cursor: 'pointer', fontSize: 12,
+                  borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6,
+                  marginBottom: 2,
+                }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f5ff')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  onClick={() => {
+                    const idx = project.diagrams.indexOf(d);
+                    if (idx >= 0) setActiveDiagram(idx);
+                  }}
+                >
+                  ⏱️ {d.name}
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                <Button size="small" type="dashed" style={{ fontSize: 11 }}
+                  onClick={() => addDiagram('class', `${selectedComponent.name}_class`, selectedComponent.id)}
+                >+ 类图</Button>
+                <Button size="small" type="dashed" style={{ fontSize: 11 }}
+                  onClick={() => addDiagram('sequence', `${selectedComponent.name}_seq`, selectedComponent.id)}
+                >+ 时序图</Button>
+              </div>
+            </>
+          );
+        })()}
       </div>
     );
   }

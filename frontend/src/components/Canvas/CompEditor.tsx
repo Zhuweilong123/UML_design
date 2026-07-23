@@ -110,12 +110,17 @@ const CompEditor: React.FC = () => {
   const isInternalUpdate = useRef(false);
   const clipboard = useRef<any>(null);
 
+  // ── Context menu state ──────────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{
+    visible: boolean; x: number; y: number; compId: string; compName: string;
+  }>({ visible: false, x: 0, y: 0, compId: '', compName: '' });
+
   const {
     diagram, selectedComponentId,
     addComponent, removeComponent, moveComponent,
     addCompRelation, removeCompRelation,
     selectComponent, selectCompRelation,
-    undo, redo,
+    undo, redo, project, setActiveDiagram, addDiagram,
   } = useDiagramStore();
 
   const { setRightPanelTab } = useUiStore();
@@ -211,6 +216,21 @@ const CompEditor: React.FC = () => {
     });
     graph.on('edge:removed', ({ edge }) => {
       if (!isInternalUpdate.current) removeCompRelation(edge.id);
+    });
+
+    // Right-click context menu on component nodes
+    graph.on('node:contextmenu', ({ node, e }: any) => {
+      const evt = e.evt || e;
+      evt?.preventDefault?.();
+      const store = useDiagramStore.getState();
+      const comp = (store.diagram.components || []).find((c) => c.id === node.id);
+      setCtxMenu({
+        visible: true,
+        x: evt?.clientX || evt?.pageX || 0,
+        y: evt?.clientY || evt?.pageY || 0,
+        compId: node.id,
+        compName: comp?.name || '',
+      });
     });
 
     // Keyboard
@@ -448,6 +468,125 @@ const CompEditor: React.FC = () => {
         </div>
       )}
       <div ref={containerRef} className="comp-canvas-container" />
+
+      {/* Component right-click context menu */}
+      {ctxMenu.visible && (() => {
+        const linkedClassDiagrams = project.diagrams.filter(
+          (d) => d.component_id === ctxMenu.compId && (d.diagram_type || 'class') === 'class'
+        );
+        const linkedSeqDiagrams = project.diagrams.filter(
+          (d) => d.component_id === ctxMenu.compId && d.diagram_type === 'sequence'
+        );
+        const closeMenu = () => setCtxMenu((prev) => ({ ...prev, visible: false }));
+
+        return (
+          <>
+            {/* Backdrop to close on click-away */}
+            <div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onClick={closeMenu} />
+            <div style={{
+              position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 1000,
+              background: '#fff', border: '1px solid #d9d9d9', borderRadius: 8,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.15)', padding: 4, minWidth: 200,
+              maxHeight: 360, overflowY: 'auto',
+            }}>
+              {/* Header — component name */}
+              <div style={{
+                padding: '6px 12px', fontSize: 13, fontWeight: 600,
+                color: '#d48806', borderBottom: '1px solid #f0f0f0', marginBottom: 4,
+              }}>
+                📦 {ctxMenu.compName}
+              </div>
+
+              {/* Linked class diagrams */}
+              <div style={{ padding: '2px 12px 6px', fontSize: 11, color: '#999', fontWeight: 500 }}>
+                关联的类图 ({linkedClassDiagrams.length})
+              </div>
+              {linkedClassDiagrams.length === 0 ? (
+                <div style={{ padding: '2px 12px 6px', fontSize: 12, color: '#bbb' }}>
+                  暂无关联类图
+                </div>
+              ) : (
+                linkedClassDiagrams.map((d, i) => (
+                  <div key={d.name || i} style={{
+                    padding: '5px 12px 5px 20px', cursor: 'pointer', fontSize: 12,
+                    borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f5ff')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    onClick={() => {
+                      const idx = project.diagrams.indexOf(d);
+                      if (idx >= 0) { setActiveDiagram(idx); closeMenu(); }
+                    }}
+                  >
+                    <span>📋</span> <span>{d.name}</span>
+                  </div>
+                ))
+              )}
+
+              {/* Linked sequence diagrams */}
+              <div style={{
+                padding: '2px 12px 6px', fontSize: 11, color: '#999', fontWeight: 500,
+                borderTop: '1px solid #f0f0f0', marginTop: 4, paddingTop: 6,
+              }}>
+                关联的时序图 ({linkedSeqDiagrams.length})
+              </div>
+              {linkedSeqDiagrams.length === 0 ? (
+                <div style={{ padding: '2px 12px 6px', fontSize: 12, color: '#bbb' }}>
+                  暂无关联时序图
+                </div>
+              ) : (
+                linkedSeqDiagrams.map((d, i) => (
+                  <div key={d.name || i} style={{
+                    padding: '5px 12px 5px 20px', cursor: 'pointer', fontSize: 12,
+                    borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f5ff')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    onClick={() => {
+                      const idx = project.diagrams.indexOf(d);
+                      if (idx >= 0) { setActiveDiagram(idx); closeMenu(); }
+                    }}
+                  >
+                    <span>⏱️</span> <span>{d.name}</span>
+                  </div>
+                ))
+              )}
+
+              {/* Create actions */}
+              <div style={{ borderTop: '1px solid #f0f0f0', marginTop: 4, paddingTop: 4 }}>
+                <div style={{
+                  padding: '5px 12px', cursor: 'pointer', fontSize: 12, borderRadius: 4,
+                  display: 'flex', alignItems: 'center', gap: 6, color: '#1890ff',
+                }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#e6f7ff')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  onClick={() => {
+                    const compName = ctxMenu.compName || 'Component';
+                    addDiagram('class', `${compName}_class`, ctxMenu.compId);
+                    closeMenu();
+                  }}
+                >
+                  <span>➕</span> <span>为此组件新建类图</span>
+                </div>
+                <div style={{
+                  padding: '5px 12px', cursor: 'pointer', fontSize: 12, borderRadius: 4,
+                  display: 'flex', alignItems: 'center', gap: 6, color: '#1890ff',
+                }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#e6f7ff')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  onClick={() => {
+                    const compName = ctxMenu.compName || 'Component';
+                    addDiagram('sequence', `${compName}_seq`, ctxMenu.compId);
+                    closeMenu();
+                  }}
+                >
+                  <span>➕</span> <span>为此组件新建时序图</span>
+                </div>
+              </div>
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 };

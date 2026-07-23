@@ -50,6 +50,7 @@ const Toolbar: React.FC = () => {
   const {
     diagram, project, isModified, undoStack, redoStack,
     undo, redo, setProject, newProject, setActiveDiagram, addDiagram,
+    removeDiagram,
     toggleGrid, setGridSize, setGridColor, setGridThickness,
     setCurrentFilepath, currentFilepath,
   } = useDiagramStore();
@@ -103,6 +104,11 @@ const Toolbar: React.FC = () => {
   const [globalInstructions, setGlobalInstructions] = useState('');
   const [globalOptimizing, setGlobalOptimizing] = useState(false);
   const [globalStreamMode, setGlobalStreamMode] = useState(false);
+
+  // Diagram tab right-click menu
+  const [tabCtxMenu, setTabCtxMenu] = useState<{
+    visible: boolean; x: number; y: number; index: number;
+  }>({ visible: false, x: 0, y: 0, index: -1 });
 
   // ── Global optimize handler (complete mode) ─────────
   const handleGlobalOptimize = async () => {
@@ -273,6 +279,20 @@ const Toolbar: React.FC = () => {
           const crel = lastOf(useDiagramStore.getState().diagram.comp_relations);
           if (crel) {
             useDiagramStore.getState().updateCompRelation(crel.id, { type: obj.type || 'dependency' });
+          }
+        },
+        diagram_meta: (obj) => {
+          const dtype = obj.diagram_type || 'class';
+          switchTo(dtype);
+          // Set component_id on the active diagram
+          const store = useDiagramStore.getState();
+          const idx = store.project.active_diagram_index;
+          const diag = store.project.diagrams[idx];
+          if (diag && obj.component_id && !diag.component_id) {
+            const newDiagrams = store.project.diagrams.map((d, i) =>
+              i === idx ? { ...d, component_id: obj.component_id } : d
+            );
+            store.setProject({ ...store.project, diagrams: newDiagrams });
           }
         },
       };
@@ -588,17 +608,33 @@ const Toolbar: React.FC = () => {
           const typeLabel = type === 'sequence' ? '时序图' : type === 'component' ? '组件图' : '类图';
           // Only show custom name if user explicitly renamed it (not auto-generated pattern)
           const isAutoName = !d.name || d.name === 'Untitled' || /^(class|sequence|component)_\d+$/.test(d.name);
-          const label = isAutoName ? typeLabel : d.name;
-          const tip = isAutoName ? `${typeLabel}（${d.name}）` : `${d.name}（${typeLabel}）`;
+          // Find parent component name if linked
+          const compDiag = project.diagrams.find((dd) => dd.diagram_type === 'component');
+          const parentComp = d.component_id
+            ? (compDiag?.components || []).find((c) => c.id === d.component_id)
+            : null;
+          const baseLabel = isAutoName ? typeLabel : d.name;
+          const label = parentComp ? `${parentComp.name} › ${baseLabel}` : baseLabel;
+          const tip = isAutoName
+            ? `${typeLabel}（${d.name}）${parentComp ? ` — 属于组件「${parentComp.name}」` : ''}`
+            : `${d.name}（${typeLabel}）${parentComp ? ` — 属于组件「${parentComp.name}」` : ''}`;
           return (
             <Tooltip key={i} title={tip}>
               <Button
                 type={isActive ? 'primary' : 'default'}
                 icon={icon}
                 onClick={() => setActiveDiagram(i)}
-                style={{ marginRight: 2 }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setTabCtxMenu({ visible: true, x: e.clientX, y: e.clientY, index: i });
+                }}
+                style={{ marginRight: 2, maxWidth: 180 }}
+                title={label}
               >
-                {label}
+                <span style={{
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap', display: 'inline-block', maxWidth: 140,
+                }}>{label}</span>
               </Button>
             </Tooltip>
           );
@@ -997,6 +1033,53 @@ const Toolbar: React.FC = () => {
           autoFocus
         />
       </Modal>
+
+      {/* Diagram tab right-click context menu */}
+      {tabCtxMenu.visible && (() => {
+        const diag = project.diagrams[tabCtxMenu.index];
+        if (!diag) return null;
+        const dtype = diag.diagram_type || 'class';
+        const typeLabel = dtype === 'sequence' ? '时序图' : dtype === 'component' ? '组件图' : '类图';
+        const isLast = project.diagrams.length <= 1;
+        const closeMenu = () => setTabCtxMenu((p) => ({ ...p, visible: false }));
+        return (
+          <>
+            <div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onClick={closeMenu} />
+            <div style={{
+              position: 'fixed', left: tabCtxMenu.x, top: tabCtxMenu.y, zIndex: 1000,
+              background: '#fff', border: '1px solid #d9d9d9', borderRadius: 8,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.15)', padding: 4, minWidth: 160,
+            }}>
+              <div style={{
+                padding: '6px 12px', fontSize: 13, fontWeight: 600,
+                color: '#555', borderBottom: '1px solid #f0f0f0', marginBottom: 4,
+              }}>
+                {typeLabel}：{diag.name}
+              </div>
+              <div style={{
+                padding: '5px 12px', cursor: isLast ? 'not-allowed' : 'pointer',
+                fontSize: 12, borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6,
+                color: isLast ? '#ccc' : '#ff4d4f',
+              }}
+                onMouseEnter={(e) => { if (!isLast) e.currentTarget.style.background = '#fff2f0'; }}
+                onMouseLeave={(e) => { if (!isLast) e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => {
+                  if (isLast) return;
+                  Modal.confirm({
+                    title: `删除「${diag.name}」`,
+                    content: `确认删除此${typeLabel}？此操作不可撤销。`,
+                    okText: '删除', okType: 'danger', cancelText: '取消',
+                    onOk: () => removeDiagram(tabCtxMenu.index),
+                  });
+                  closeMenu();
+                }}
+              >
+                <span>🗑️</span> <span>{isLast ? '至少保留一张图' : '删除此图'}</span>
+              </div>
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 };

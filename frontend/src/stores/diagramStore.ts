@@ -64,7 +64,7 @@ interface DiagramState {
   setProject: (project: Project) => void;
   newProject: (name?: string) => void;
   setActiveDiagram: (index: number) => void;
-  addDiagram: (type?: string, name?: string) => void;
+  addDiagram: (type?: string, name?: string, componentId?: string) => void;
   removeDiagram: (index: number) => void;
 
   // ── Legacy diagram actions (kept for compatibility) ──
@@ -222,10 +222,11 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     }
   },
 
-  addDiagram: (type = 'class', name) => {
+  addDiagram: (type = 'class', name, componentId?) => {
     const state = get();
     const newD = createDefaultDiagram(name || `${type}_${state.project.diagrams.length + 1}`);
     newD.diagram_type = type;
+    newD.component_id = componentId || '';
     const diagrams = [...state.project.diagrams, newD];
     console.debug('[Store] addDiagram:', type, newD.name, '→', diagrams.length, 'total');
     set({
